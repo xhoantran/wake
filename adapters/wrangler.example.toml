@@ -1,0 +1,13 @@
+# Deploy Wake as a Worker on your own Cloudflare account, on your site's route.
+name = "wake"
+main = "worker.js"            # export default createWorker() from 'wake/worker'
+compatibility_date = "2026-09-01"
+
+routes = [{ pattern = "www.example.com/*", zone_name = "example.com" }]
+
+[vars]
+WAKE_ENDPOINT = "https://collector.wake.dev"
+# WAKE_DISABLED = "1"         # kill switch: pure pass-through
+
+# Store the key as a secret, not in this file:
+#   npx wrangler secret put WAKE_API_KEY

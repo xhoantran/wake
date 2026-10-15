@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://meridian.example/</loc></url>
+  <url><loc>https://meridian.example/plans/family</loc></url>
+  <url><loc>https://meridian.example/plans/loyalty</loc></url>
+  <url><loc>https://meridian.example/travel/international-pass</loc></url>
+  <url><loc>https://meridian.example/compare/crestline</loc></url>
+  <url><loc>https://meridian.example/deals/bring-your-own-phone</loc></url>
+  <url><loc>https://meridian.example/support/cancel</loc></url>
+  <url><loc>https://meridian.example/signup</loc></url>
+  <url><loc>https://meridian.example/agents.md</loc></url>
+</urlset>

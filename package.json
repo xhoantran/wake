@@ -1,0 +1,39 @@
+{
+  "name": "wake",
+  "version": "0.1.0",
+  "description": "Session tracing and context routing for AI agents that browse your website.",
+  "type": "module",
+  "bin": {
+    "wake": "bin/wake.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./node": "./src/node.js",
+    "./node-middleware": "./adapters/node.js",
+    "./next": "./adapters/next.js",
+    "./worker": "./adapters/worker.js",
+    "./collector": "./src/collector.js",
+    "./storage": "./src/store.js"
+  },
+  "scripts": {
+    "test": "node --no-warnings --test test/*.test.js",
+    "example:site": "node --no-warnings examples/meridian/site-server.js",
+    "start": "node --no-warnings bin/wake.js --config examples/meridian/wake.config.js",
+    "simulate": "node --no-warnings scripts/simulate.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "pg": "^8.23.1"
+  },
+  "peerDependencies": {
+    "pg": "^8.11.0"
+  },
+  "peerDependenciesMeta": {
+    "pg": {
+      "optional": true
+    }
+  }
+}
