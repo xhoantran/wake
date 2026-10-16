@@ -4,7 +4,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { normalizeConfig } from './config.js';
 import { flowed } from './flow.js';
-import { DEFAULT_SITE } from './store.js';
+import { DEFAULT_SITE } from './constants.js';
 
 const DAY = 86_400_000;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;

@@ -4,26 +4,14 @@
 // A storage holds every tenant. storage.site(id) is the only way to its sessions and events, and every query
 // it runs is scoped by site_id. storage.tenants manages organizations, sites, API keys and site configs.
 import { openSqlite } from './storage/sqlite.js';
-import { siteStore, tenantStore } from './storage/sql.js';
+import { wrapStorage } from './storage/wrap.js';
+import { DEFAULT_SITE } from './constants.js';
 
-export const DEFAULT_SITE = 'default';
+export { DEFAULT_SITE };
 
 const isPostgres = (target) => typeof target === 'string' ? /^postgres(ql)?:\/\//i.test(target) : typeof target?.query === 'function';
 
-function wrap(db) {
-  const sites = new Map();
-  return {
-    dialect: db.dialect,
-    db,
-    tenants: tenantStore(db),
-    site(siteId) {
-      let s = sites.get(siteId);
-      if (!s) sites.set(siteId, (s = siteStore(db, siteId)));
-      return s;
-    },
-    close: () => db.close(),
-  };
-}
+const wrap = wrapStorage;
 
 /** A SQLite path (or ':memory:') returns the storage; a postgres:// URL or a pg.Pool returns a promise of it. */
 export function openStorage(target = ':memory:', options = {}) {

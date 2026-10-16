@@ -9,7 +9,7 @@ import { scoreIntents, intentsSatisfy } from './intent.js';
 import { mintCode, json, matchPath } from './util.js';
 import { flow, flowed, isPromise, createSerial } from './flow.js';
 import { createTenants, storableConfig } from './tenants.js';
-import { DEFAULT_SITE } from './store.js';
+import { DEFAULT_SITE } from './constants.js';
 import { createRateLimiter, readBody } from './limits.js';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);

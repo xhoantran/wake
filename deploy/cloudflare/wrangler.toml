@@ -1,0 +1,32 @@
+# Wake collector on Cloudflare Workers, with Postgres (for example Supabase) through Hyperdrive.
+#
+# One-time setup (run from this folder):
+#   1. Apply the schema: from the repo root, any `wake admin` command against the database runs the migrations, e.g.
+#        node bin/wake.js admin org create --db "postgres://…direct connection…" --id acme --name "Acme"
+#   2. npx wrangler hyperdrive create wake-db --connection-string="postgres://…"
+#      and put the id it prints below.
+#   3. npx wrangler secret put WAKE_SECRET          (signs dashboard links; any long random string)
+#      npx wrangler secret put ANTHROPIC_API_KEY    (optional; enables the daily answer checks)
+#   4. npx wrangler deploy
+#
+# Local development against a local Postgres:
+#   CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgres://postgres@127.0.0.1:5432/wake" npx wrangler dev
+
+name = "wake-collector"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Serve the collector on your own domain so you can move it later without touching customer installs.
+# routes = [{ pattern = "collector.example.com", custom_domain = true }]
+
+[[hyperdrive]]
+binding = "HYPERDRIVE"
+id = "replace-with-your-hyperdrive-id"
+
+# Daily answer checks for every site whose config lists facts (needs ANTHROPIC_API_KEY).
+[triggers]
+crons = ["0 6 * * *"]
+
+[observability]
+enabled = true

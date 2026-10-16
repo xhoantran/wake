@@ -46,6 +46,11 @@ CREATE INDEX answers_run ON answers (site_id, run, id);
 
 export const MIGRATIONS = [{ version: 1, sql: SCHEMA_V1 }];
 
+/** COUNT and SUM come back as int8 / numeric; Wake's numbers fit in a double, so parse them as numbers. */
+export function pgTypes(pg) {
+  return { getTypeParser: (oid, format) => ([20, 1700].includes(oid) ? Number : pg.types.getTypeParser(oid, format)) };
+}
+
 const placeholders = new Map();
 function toPg(sql) {
   let out = placeholders.get(sql);
@@ -65,9 +70,7 @@ export async function openPostgres(target, { now = () => Date.now(), migrate: ru
     try { pg = (await import('pg')).default; } catch {
       throw new Error('wake: install the "pg" package to use Postgres (npm install pg)');
     }
-    // COUNT and SUM come back as int8 / numeric; Wake's numbers fit in a double, so parse them as numbers.
-    const types = { getTypeParser: (oid, format) => ([20, 1700].includes(oid) ? Number : pg.types.getTypeParser(oid, format)) };
-    pool = new pg.Pool({ connectionString: target, types, max: Number(process.env.WAKE_PG_POOL || 10) });
+    pool = new pg.Pool({ connectionString: target, types: pgTypes(pg), max: Number(process.env.WAKE_PG_POOL || 10) });
     owned = true;
   }
   const query = async (sql, params = []) => (await pool.query(toPg(sql), params)).rows;

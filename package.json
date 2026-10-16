@@ -13,20 +13,25 @@
     "./next": "./adapters/next.js",
     "./worker": "./adapters/worker.js",
     "./collector": "./src/collector.js",
-    "./storage": "./src/store.js"
+    "./storage": "./src/store.js",
+    "./collector-worker": "./adapters/collector-worker.js"
   },
   "scripts": {
     "test": "node --no-warnings --test test/*.test.js",
     "example:site": "node --no-warnings examples/meridian/site-server.js",
     "start": "node --no-warnings bin/wake.js --config examples/meridian/wake.config.js",
-    "simulate": "node --no-warnings scripts/simulate.js"
+    "simulate": "node --no-warnings scripts/simulate.js",
+    "test:pg": "WAKE_TEST_PG=${WAKE_TEST_PG:-postgres://postgres@127.0.0.1:5432/postgres} node --no-warnings --test test/*.test.js",
+    "collector:dev": "cd deploy/cloudflare && wrangler dev",
+    "collector:deploy": "cd deploy/cloudflare && wrangler deploy"
   },
   "engines": {
     "node": ">=22.5"
   },
   "license": "UNLICENSED",
   "devDependencies": {
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "wrangler": "^4.151.1"
   },
   "peerDependencies": {
     "pg": "^8.11.0"

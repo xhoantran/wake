@@ -179,6 +179,42 @@ ANTHROPIC_API_KEY=… node bin/wake.js check --config wake.config.js --db wake.d
 
 Conversions can come from a matched request (the response header `x-wake-value` sets the value), from `wake.conversion(request, { name, value })` in your own handler (it reads the hand-off cookie), or from your server: `POST /_wake/api/convert {"code": "...", "name": "order", "value": 120}`.
 
+## Deploy the collector to Cloudflare
+
+The hosted collector runs as a Cloudflare Worker with Postgres (for example Supabase) behind Hyperdrive. Customer sites never call it while serving a page: their SDK pushes batched events to it and pulls its config about once a minute.
+
+```
+visitors ─> customer's Cloudflare account: Wake SDK Worker ─> customer's site (unchanged)
+                     │ events (batched, after the response) / config (cached)
+                     ▼
+            your Cloudflare account: collector Worker (ingest, config, dashboard, daily answer checks)
+                     │ Hyperdrive (one client per request)
+                     ▼
+            Postgres (Supabase)
+```
+
+1. Apply the schema and create your first site. Any `wake admin` command against the database runs the migrations:
+   ```bash
+   node bin/wake.js admin org create --db "postgres://…" --id acme --name "Acme"
+   node bin/wake.js admin site create --db "postgres://…" --org acme --name "Acme web" --config wake.config.js
+   ```
+   Use the database's direct connection string for these commands.
+2. Create a Hyperdrive config for the same database and put its id in `deploy/cloudflare/wrangler.toml`:
+   ```bash
+   npx wrangler hyperdrive create wake-db --connection-string="postgres://…"
+   ```
+3. Set the secrets: `npx wrangler secret put WAKE_SECRET` (signs dashboard links), and optionally `ANTHROPIC_API_KEY` for the daily answer checks.
+4. `npm run collector:deploy`, then point a custom domain such as `collector.example.com` at it.
+5. Get a dashboard link: `node bin/wake.js admin token --db "postgres://…" --site SITE --secret … --url https://collector.example.com`.
+
+Local development runs the Worker in the real Workers runtime against a local Postgres:
+
+```bash
+CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE="postgres://user:password@127.0.0.1:5432/wake" npm run collector:dev
+```
+
+The Worker never migrates the database, so a cold start never takes a lock. Each request opens one database client through Hyperdrive and closes it after the response; requests sharing an isolate keep separate clients.
+
 ## Collector API
 
 - `POST /v1/events` with `Authorization: Bearer <api key>` and `{ "events": [...] }`. The key decides the site the events are written to. Returns `202 { accepted, ignored, rejected }`: only an agent's own read can start a session, so other events with an unknown code are ignored; events older than 7 days or dated in the future are rejected. `401` for an unknown, revoked or expired key, `413` over 1,000 events or 1 MB, `429` with `Retry-After` over the key's rate limit.
