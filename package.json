@@ -54,6 +54,7 @@
     "examples",
     "LICENSE",
     "NOTICE",
-    "README.md"
+    "README.md",
+    "docs"
   ]
 }
