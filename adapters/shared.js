@@ -8,11 +8,13 @@ import { createConfigSource } from '../src/sdk/config-source.js';
  *   { config }             local rules (optional with an endpoint; required without one)
  *   { telemetry }          custom telemetry sink (tests, self-hosting)
  *   { flushMs }            batch window; 0 = flush only when the platform calls flush (Workers)
+ *   { prefetch }           pull the remote config right away (default true). Workers pass false: the first
+ *                          request starts the pull inside waitUntil, so the platform doesn't cancel it.
  */
-export function buildCore({ apiKey, endpoint, config, telemetry, fetch: fetchImpl = globalThis.fetch, flushMs = 2000, refreshMs, log, now, fetchSitemap } = {}) {
+export function buildCore({ apiKey, endpoint, config, telemetry, fetch: fetchImpl = globalThis.fetch, flushMs = 2000, refreshMs, log, now, fetchSitemap, prefetch = true } = {}) {
   const sink = telemetry || (endpoint ? createTelemetry({ endpoint, apiKey, fetch: fetchImpl, flushMs, onError: log }) : null);
   if (!sink) throw new Error('wake: pass { apiKey, endpoint } (or a telemetry sink)');
   const source = createConfigSource({ config, endpoint, apiKey, fetch: fetchImpl, refreshMs, now });
-  if (!config) source.maybeRefresh(); // first pull; requests pass through untouched until it lands
+  if (!config && prefetch) source.maybeRefresh(); // first pull; requests pass through untouched until it lands
   return createCore({ source, telemetry: sink, fetch: fetchImpl, log, now, fetchSitemap });
 }

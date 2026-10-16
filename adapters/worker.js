@@ -21,11 +21,42 @@ export function createWorker(options = {}) {
           telemetry: options.telemetry,
           fetch: options.fetch,
           flushMs: 0,
+          prefetch: false,
         });
       }
       if (env.WAKE_DISABLED === '1') return fetchImpl(request);
       const ip = request.headers.get('cf-connecting-ip') || '';
       return core.handle(request, { ip, next: (req) => fetchImpl(req), waitUntil: ctx.waitUntil?.bind(ctx) });
+    },
+  };
+}
+
+/**
+ * Wrap a Worker you already have (for example one that serves static assets) with Wake:
+ *   export default withWake(worker);
+ * Reads WAKE_API_KEY and WAKE_ENDPOINT from the Worker's settings. Without an API key, or with
+ * WAKE_DISABLED=1, every request goes straight to your Worker. Wake's config (mode, rules) comes
+ * from the collector unless you pass one.
+ */
+export function withWake(app, options = {}) {
+  let core = options.core || null;
+  return {
+    ...app,
+    async fetch(request, env = {}, ctx = {}) {
+      const apiKey = options.apiKey || env.WAKE_API_KEY;
+      if (env.WAKE_DISABLED === '1' || (!apiKey && !options.telemetry && !core)) return app.fetch(request, env, ctx);
+      if (!core) {
+        try {
+          core = buildCore({
+            apiKey, endpoint: options.endpoint || env.WAKE_ENDPOINT, config: options.config,
+            telemetry: options.telemetry, fetch: options.fetch, flushMs: 0, prefetch: false,
+          });
+        } catch {
+          return app.fetch(request, env, ctx);
+        }
+      }
+      const ip = request.headers.get('cf-connecting-ip') || '';
+      return core.handle(request, { ip, next: (req) => app.fetch(req, env, ctx), waitUntil: ctx.waitUntil?.bind(ctx) });
     },
   };
 }

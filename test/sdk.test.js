@@ -9,7 +9,7 @@ import { openStore } from '../src/store.js';
 import { serve } from '../src/node.js';
 import { createTelemetry } from '../src/sdk/telemetry.js';
 import { wakeMiddleware } from '../adapters/node.js';
-import { createWorker } from '../adapters/worker.js';
+import { createWorker, withWake } from '../adapters/worker.js';
 import { wakeNext } from '../adapters/next.js';
 import { tokenFrom } from './helpers.js';
 
@@ -213,4 +213,49 @@ test('telemetry batches, caps its buffer and never throws', async () => {
   assert.equal(broken.pending(), 3);
   await broken.flush();
   assert.equal(broken.stats.dropped, 5);
+});
+
+test('withWake wraps an existing Worker: off without a key, byte-identical in shadow mode, config from the collector', async () => {
+  const PAGE = '<html><body><a href="/managed">Managed</a> code NW-ABC123</body></html>';
+  let calls = 0;
+  const app = { async fetch(request, env, ctx) { calls++; return new Response(PAGE, { headers: { 'content-type': 'text/html', 'x-app': 'landing' } }); } };
+  const req = (ua) => new Request('https://www.new-wave.ai/managed', { headers: { 'user-agent': ua, 'cf-connecting-ip': '20.1.1.1' } });
+
+  // No key: Wake is not involved at all.
+  const off = withWake(app);
+  assert.equal(await (await off.fetch(req(CHATGPT), {}, { waitUntil() {} })).text(), PAGE);
+  assert.equal(calls, 1);
+
+  // With a key: the config comes from the collector; the first request passes through while it loads.
+  const sent = [];
+  const collectorFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/config')) return Response.json({ mode: 'shadow', intents: [{ id: 'managed', label: 'Managed', paths: ['/managed'] }], version: 3 });
+    sent.push(...JSON.parse(init.body).events);
+    return new Response('{}', { status: 202 });
+  };
+  const wrapped = withWake(app, { fetch: collectorFetch });
+  const env = { WAKE_API_KEY: 'wk_live_test', WAKE_ENDPOINT: 'https://wake.example' };
+  const pending = [];
+  const ctx = { waitUntil: (p) => pending.push(p) };
+  let r = await wrapped.fetch(req(CHATGPT), env, ctx);
+  assert.equal(await r.text(), PAGE);
+  await Promise.all(pending.splice(0));
+
+  r = await wrapped.fetch(req(CHATGPT), env, ctx);
+  assert.equal(await r.text(), PAGE, 'shadow mode returns exactly what the app returned');
+  assert.equal(r.headers.get('x-app'), 'landing');
+  assert.equal(r.headers.get('x-wake-session'), null);
+  await Promise.all(pending.splice(0));
+  const read = sent.find((e) => e.type === 'fetch');
+  assert.equal(read.path, '/managed');
+  assert.equal(read.data.shadow, true);
+
+  // People pass straight through and nothing is sent for them.
+  const before = sent.length;
+  assert.equal(await (await wrapped.fetch(req(SAFARI), env, ctx)).text(), PAGE);
+  await Promise.all(pending.splice(0));
+  assert.equal(sent.length, before);
+
+  // Kill switch from the Worker's settings.
+  assert.equal(await (await wrapped.fetch(req(CHATGPT), { ...env, WAKE_DISABLED: '1' }, ctx)).text(), PAGE);
 });

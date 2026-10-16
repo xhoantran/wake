@@ -11,7 +11,10 @@
     "./node": "./src/node.js",
     "./node-middleware": "./adapters/node.js",
     "./next": "./adapters/next.js",
-    "./worker": "./adapters/worker.js",
+    "./worker": {
+      "types": "./adapters/worker.d.ts",
+      "default": "./adapters/worker.js"
+    },
     "./collector": "./src/collector.js",
     "./storage": "./src/store.js",
     "./ee": "./ee/index.js",
