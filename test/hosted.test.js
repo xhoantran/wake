@@ -60,7 +60,7 @@ for (const backend of backends) {
       orgB = await t.createOrg({ id: 'bolt', name: 'Bolt' });
       const cfg = (name, codePrefix) => ({ ...structuredClone(baseConfig), name, codePrefix, mode: 'trace' });
       A = await t.createSite({ orgId: orgA.id, id: 'acme-shop', name: 'Acme shop', config: cfg('Acme shop', 'AC') });
-      B = await t.createSite({ orgId: orgB.id, id: 'bolt-store', name: 'Bolt store', config: { ...cfg('Bolt store', 'BO'), rules: [] } });
+      B = await t.createSite({ orgId: orgB.id, id: 'bolt-store', name: 'Bolt store', config: { ...cfg('Bolt store', 'BO'), rules: [], brief: { enabled: false } } });
       A.key = (await t.issueKey(A.id)).key;
       B.key = (await t.issueKey(B.id)).key;
       A.token = t.signToken({ site: A.id });
@@ -247,7 +247,7 @@ test('a single-site SQLite database from before sites existed opens as site "def
   assert.equal(o.experiments.find((e) => e.id === 'mexico-first').routed.n, 1);
 
   // Restarting with an edited file adds a version; a dashboard edit is kept over the file.
-  const edited = { ...structuredClone(baseConfig), mode: 'trace' };
+  const edited = { ...structuredClone(baseConfig), mode: 'route' };
   assert.equal(createCollector({ config: edited, store, apiKeys: [] }).siteConfig().version, 2);
   await collector.tenants.saveConfig('default', { ...edited, mode: 'shadow' }, { source: 'dashboard' });
   const logs = [];

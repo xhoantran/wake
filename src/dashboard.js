@@ -197,7 +197,8 @@ function expView(e) {
   const m = Math.max(0.0001, e.handoff.routed, e.handoff.holdout);
   const verdict = expVerdict(e);
   return '<div class="exp"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + esc(e.id) + '</b>' + verdict + '</div>'
-    + '<span class="small">Leads with: ' + esc(e.label) + ' · ' + pct(e.holdoutShare, 0) + ' held out</span>'
+    + '<span class="small">' + (e.kind === 'brief' ? 'Adds: ' : 'Leads with: ') + esc(e.label) + ' · ' + pct(e.holdoutShare, 0) + ' held out</span>'
+    + (e.kind === 'brief' ? '<span class="small">Opened the summary: ' + num(e.routed.opened) + ' of ' + num(e.routed.n) + ' routed sessions (' + pct(e.routed.n ? e.routed.opened / e.routed.n : 0) + ')</span>' : '')
     + arm('Routed', 'routed', e.routed, e.handoff.routed, e.conversion.routed, m)
     + arm('Holdout', 'holdout', e.holdout, e.handoff.holdout, e.conversion.holdout, m)
     + '<span class="small">Take-over rate difference ' + (e.handoff.diff >= 0 ? '+' : '') + pct(e.handoff.diff) + ' (95% interval ' + pct(e.handoff.low) + ' to ' + pct(e.handoff.high) + '). Conversion difference ' + (e.conversion.diff >= 0 ? '+' : '') + pct(e.conversion.diff) + '.</span></div>';
@@ -235,7 +236,7 @@ function sessionsView(list) {
     time(s.lastSeen)]), [0, 0, 1, 0, 0, 0]));
 }
 
-const TYPE = { fetch: 'Read', rescue: 'Guessed URL, redirected', not_found: 'Guessed URL, not found', handoff: 'Person took over', shared: 'Person opened a shared session link', link_check: 'Agent checked its sign-up link', conversion: 'Converted', bot: 'Crawler' };
+const TYPE = { fetch: 'Read', rescue: 'Guessed URL, redirected', not_found: 'Guessed URL, not found', handoff: 'Person took over', shared: 'Person opened a shared session link', link_check: 'Agent checked its sign-up link', conversion: 'Converted', bot: 'Crawler', brief: 'Read its research summary' };
 function sessionView(d) {
   const s = d.session;
   const evs = d.events.map((e) => {
@@ -244,6 +245,7 @@ function sessionView(d) {
     if (e.query) detail += ' · asked "' + esc(e.query) + '"';
     if (e.data?.to) detail += ' → ' + esc(e.data.to);
     if (e.data?.rules) detail += ' · rules: ' + esc(e.data.rules.join(', '));
+    if (e.data?.facts) detail += ' · ' + e.data.facts.length + ' facts: ' + esc(e.data.facts.join(', '));
     if (e.data?.name) detail += ' · ' + esc(e.data.name) + (e.data.value ? ' ' + money(e.data.value) : '');
     if (e.data?.referer !== undefined) detail += ' · referrer: ' + esc(e.data.referer || 'none');
     const st = e.status ? '<span class="pill ' + (e.status < 300 ? 'ok' : e.status < 400 ? 'go' : 'wait') + '">' + e.status + '</span>' : '';

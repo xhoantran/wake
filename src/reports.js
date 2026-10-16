@@ -80,6 +80,20 @@ function* overviewOf(store, config, { since = 0 } = {}) {
     };
   });
 
+  if (config.brief?.enabled) {
+    // The research brief is tested like a rule: routed sessions get the link, held-out sessions don't.
+    const arm = (name) => exp.find((e) => e.rule === 'research-brief' && e.arm === name) || { n: 0, handoffs: 0, conversions: 0 };
+    const routed = arm('routed'), holdout = arm('holdout');
+    const opens = (yield store.briefOpens('research-brief', since)).map((o) => ({ arm: o.arm, opened: Number(o.opened) }));
+    const opened = (name) => opens.find((o) => o.arm === name)?.opened || 0;
+    experiments.push({
+      id: 'research-brief', promote: null, kind: 'brief', label: 'A link to a per-session research summary', holdoutShare: config.brief.holdout,
+      routed: { ...routed, opened: opened('routed') }, holdout: { ...holdout, opened: opened('holdout') },
+      handoff: compare({ n: routed.n, k: routed.handoffs }, { n: holdout.n, k: holdout.handoffs }),
+      conversion: compare({ n: routed.n, k: routed.conversions }, { n: holdout.n, k: holdout.conversions }),
+    });
+  }
+
   const guessed = (yield store.guessedPaths(since))
     .map((g) => ({ path: g.path, sessions: Number(g.sessions), rescuedTo: Number(g.rescued) ? JSON.parse(g.data || '{}').to : null }));
 

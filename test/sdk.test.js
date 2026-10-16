@@ -16,7 +16,7 @@ import { tokenFrom } from './helpers.js';
 const CHATGPT = 'Mozilla/5.0 AppleWebKit/537.36; compatible; ChatGPT-User/1.0; +https://openai.com/bot';
 const SAFARI = 'Mozilla/5.0 (iPhone) AppleWebKit/605.1.15 Version/19.0 Mobile Safari/604.1';
 const KEY = 'wk_test_123';
-const cfg = (extra = {}) => ({ ...structuredClone(baseConfig), ...extra });
+const cfg = (extra = {}) => ({ ...structuredClone(baseConfig), mode: 'route', brief: { enabled: false }, ...extra });
 
 let collector, collectorServer, C, site, S;
 const servers = [];

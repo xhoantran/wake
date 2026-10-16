@@ -3,10 +3,11 @@
 // and events go out through telemetry after the response. Any error falls back to the original response.
 import { classifyAgent } from '../agents.js';
 import { mintCode, parsePrefixed, matchPath, unitHash, redact, readCookie, hashIp } from '../util.js';
-import { makeUrlRewriter, rewriteHtml, rewriteMarkdown, extractTitle, ensureCanonical, hasBlock, promoteBlock, listBlocks } from '../rewrite.js';
+import { makeUrlRewriter, rewriteHtml, rewriteMarkdown, extractTitle, ensureCanonical, hasBlock, promoteBlock, listBlocks, insertAtLead } from '../rewrite.js';
 import { scoreIntents, intentsSatisfy } from '../intent.js';
 import { suggestPath, parseSitemap } from '../rescue.js';
 import { decodeState, formatToken } from './token.js';
+import { BRIEF_RULE, briefEligible, briefLink, renderBrief, selectFacts } from './research-brief.js';
 
 const HOP_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive'];
 const NULL_BODY = new Set([101, 204, 205, 304]);
@@ -73,6 +74,39 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     return `${cfg.cookieName}=${encodeURIComponent(code)}; Path=/; Max-Age=${cfg.cookieDays * 86400}; HttpOnly; SameSite=Lax`;
   }
 
+  function rewriterFor(cfg, url, token, cleanPath) {
+    return makeUrlRewriter({
+      code: token, prefix: cfg.prefix, handoffPrefix: cfg.handoffPrefix,
+      handoffPaths: cfg.handoffPaths, skipPaths: [...cfg.skipPaths, `${cfg.dashboard.path}/**`],
+      cleanPath, requestOrigin: url.origin, upstreamOrigin: cfg.upstreamOrigin || url.origin,
+      sameOrigins: new Set([url.origin, ...(cfg.upstreamOrigin ? [cfg.upstreamOrigin] : []), ...(cfg.publicOrigin ? [new URL(cfg.publicOrigin).origin] : []), ...cfg.sameSiteOrigins]),
+    });
+  }
+
+  const asScored = (cfg, scores) => cfg.intents.map((it, i) => ({ id: it.id, label: it.label || it.id, score: scores[i] })).filter((s) => s.score > 0);
+
+  function siteName(cfg, url) {
+    return cfg.name || cfg.answerChecks.site || (cfg.publicOrigin ? new URL(cfg.publicOrigin).host : url.host);
+  }
+
+  /** The research brief for a session. token = null renders clean links (for a person who opened a shared brief URL). */
+  function briefResponse(cfg, request, url, code, token, scores, extraHeaders = {}) {
+    const accept = (request.headers.get('accept') || '').toLowerCase();
+    const kind = accept.includes('text/markdown') && !/text\/html/.test(accept.split('text/markdown')[0]) ? 'markdown' : 'html';
+    let text = renderBrief(cfg, asScored(cfg, scores), { kind, site: siteName(cfg, url) });
+    if (token) {
+      const rw = rewriterFor(cfg, url, token, cfg.brief.path);
+      text = kind === 'html' ? rewriteHtml(text, rw) : rewriteMarkdown(text, rw);
+    }
+    return new Response(text, {
+      status: 200,
+      headers: {
+        'content-type': kind === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
+        'x-robots-tag': 'noindex, nofollow', 'cache-control': 'private, no-store', 'x-wake-session': code, ...extraHeaders,
+      },
+    });
+  }
+
   function searchQuery(cfg, url, path) {
     if (!matchPath(cfg.search.paths, path)) return null;
     for (const p of cfg.search.params) {
@@ -131,6 +165,14 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
         return { kind: 'agent', path: cleanPath + url.search, ctx: { cfg, url, cleanPath, path, base: { ...base, actor: 'agent', code: pre?.code ?? null }, shadow: true, scores: decodeState(pre?.state, cfg.intents.length) } };
       }
       const code = pre?.code || mintCode(cfg.codePrefix);
+      if (cfg.brief.enabled && cleanPath === cfg.brief.path && request.method === 'GET') {
+        const scores = decodeState(pre?.state, cfg.intents.length);
+        const { groups } = selectFacts(cfg, asScored(cfg, scores));
+        const arm = unitHash(`${code}:${BRIEF_RULE}`) < cfg.brief.holdout ? 'holdout' : 'routed';
+        emit({ ...base, actor: 'agent', code, type: 'brief', status: 200, title: cfg.brief.title,
+          data: { arm, minted: !pre, facts: groups.flatMap((g) => g.facts.map((f) => f.id)) } });
+        return { kind: 'respond', response: briefResponse(cfg, request, url, code, pre?.token || code, scores) };
+      }
       return {
         kind: 'agent', path: cleanPath + url.search,
         ctx: { cfg, url, cleanPath, path, code, minted: !pre, scores: decodeState(pre?.state, cfg.intents.length), base: { ...base, actor: 'agent', code } },
@@ -145,6 +187,14 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     }
 
     const sid = readCookie(request, cfg.cookieName);
+    if (pre && cfg.brief.enabled && cleanPath === cfg.brief.path && request.method === 'GET') {
+      const extra = {};
+      if (!sid) {
+        emit({ ...base, path, actor: 'human', code: pre.code, type: 'shared', status: 200, data: { referer: request.headers.get('referer') || '' } });
+        extra['set-cookie'] = cookie(cfg, pre.code);
+      }
+      return { kind: 'respond', response: briefResponse(cfg, request, url, pre.code, null, decodeState(pre.state, cfg.intents.length), extra) };
+    }
     if (pre) {
       // A person opened a session URL directly (the agent shared an /a/ link, or it was forwarded).
       if (!sid) {
@@ -198,7 +248,7 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     const tooBig = Number(response.headers.get('content-length')) > cfg.maxTransformBytes;
     const pageScores = (q) => scoreIntents([{ path, query: q }], cfg.intents);
     const addScores = (prev, inc) => cfg.intents.map((it, i) => prev[i] + (inc.find((s) => s.id === it.id)?.score || 0));
-    const asScored = (scores) => cfg.intents.map((it, i) => ({ id: it.id, label: it.label || it.id, score: scores[i] })).filter((s) => s.score > 0);
+    const scoredOf = (scores) => asScored(cfg, scores);
 
     // Shadow: observe only; the response is returned as is. The page's blocks are reported so the
     // collector, which has the session history, can work out which rules would have applied.
@@ -226,12 +276,7 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
       emit({ ...base, type: 'not_found', status, data: { suggestion: hit?.to ?? null, minted: ctx.minted } });
     }
 
-    const rewriteUrl = makeUrlRewriter({
-      code: token, prefix: cfg.prefix, handoffPrefix: cfg.handoffPrefix,
-      handoffPaths: cfg.handoffPaths, skipPaths: [...cfg.skipPaths, `${cfg.dashboard.path}/**`],
-      cleanPath, requestOrigin: url.origin, upstreamOrigin: cfg.upstreamOrigin || url.origin,
-      sameOrigins: new Set([url.origin, ...(cfg.upstreamOrigin ? [cfg.upstreamOrigin] : []), ...(cfg.publicOrigin ? [new URL(cfg.publicOrigin).origin] : []), ...cfg.sameSiteOrigins]),
-    });
+    const rewriteUrl = rewriterFor(cfg, url, token, cleanPath);
 
     const out = copyHeaders(response);
     out.set('x-wake-session', ctx.code);
@@ -248,7 +293,7 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     const applied = [];
     const exposures = [];
     if (status === 200 && cfg.mode === 'route') {
-      const scored = asScored(scores);
+      const scored = scoredOf(scores);
       for (const rule of cfg.rules) {
         if (rule.when?.path && !matchPath(rule.when.path, path)) continue;
         if (!intentsSatisfy(rule.when, scored, cfg.minIntentScore)) continue;
@@ -263,8 +308,18 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
       }
     }
 
+    // Research brief: routed sessions get a plain link to their summary near the top of the page.
+    if (status === 200 && cfg.mode === 'route' && path !== cfg.brief.path && briefEligible(cfg, scoredOf(scores))) {
+      const arm = unitHash(`${ctx.code}:${BRIEF_RULE}`) < cfg.brief.holdout ? 'holdout' : 'routed';
+      exposures.push({ rule: BRIEF_RULE, arm });
+      if (arm === 'routed') {
+        text = insertAtLead(text, briefLink(cfg, scoredOf(scores), kind), kind);
+        applied.push(BRIEF_RULE);
+      } else applied.push(`${BRIEF_RULE} (holdout)`);
+    }
+
     if (typeof cfg.transform === 'function') {
-      const t = cfg.transform(text, { path, kind, code: ctx.code, intents: asScored(scores) });
+      const t = cfg.transform(text, { path, kind, code: ctx.code, intents: scoredOf(scores) });
       if (typeof t === 'string') text = t;
     }
 

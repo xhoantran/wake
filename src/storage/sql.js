@@ -59,6 +59,9 @@ export function siteStore(db, siteId) {
         SUM(CASE WHEN s.converted_at IS NOT NULL THEN 1 ELSE 0 END) AS conversions
       FROM exposures x JOIN sessions s ON s.site_id = x.site_id AND s.code = x.code
       WHERE x.site_id = ? AND x.eligible = 1 AND x.ts >= ? GROUP BY x.rule, x.arm`, [S, since]),
+    briefOpens: (rule, since) => db.all(`SELECT x.arm, COUNT(DISTINCT x.code) AS opened
+      FROM exposures x JOIN events e ON e.site_id = x.site_id AND e.code = x.code AND e.type = 'brief'
+      WHERE x.site_id = ? AND x.rule = ? AND x.eligible = 1 AND x.ts >= ? GROUP BY x.arm`, [S, rule, since]),
     guessedPaths: (since) => db.all(`SELECT path, COUNT(DISTINCT code) AS sessions,
         SUM(CASE WHEN type = 'rescue' THEN 1 ELSE 0 END) AS rescued, MAX(data) AS data
       FROM events WHERE site_id = ? AND type IN ('rescue', 'not_found') AND ts >= ?

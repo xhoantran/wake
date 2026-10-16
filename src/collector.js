@@ -13,7 +13,7 @@ import { DEFAULT_SITE } from './store.js';
 import { createRateLimiter, readBody } from './limits.js';
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
-const TYPES = new Set(['fetch', 'rescue', 'not_found', 'handoff', 'link_check', 'shared', 'conversion', 'bot', 'error']);
+const TYPES = new Set(['fetch', 'rescue', 'not_found', 'handoff', 'link_check', 'shared', 'conversion', 'bot', 'error', 'brief']);
 const DAY = 86_400_000;
 
 export const DEFAULT_LIMITS = {

@@ -1,9 +1,9 @@
 const DEFAULTS = {
   upstream: null,            // proxy mode only: origin Wake fetches pages from, e.g. "https://www.example.com"
   enabled: true,             // kill switch: false = pass everything through (session URLs still redirect to clean URLs)
-  mode: 'route',             // shadow = observe only, never change a response
-                             // trace  = sessions and link rewriting, no content rules or redirects for guessed URLs
-                             // route  = everything
+  mode: 'trace',             // shadow = observe only, never change a response
+                             // trace  = sessions and link rewriting, no content rules or redirects for guessed URLs (the default)
+                             // route  = everything: content rules, the research brief and redirects for guessed URLs (opt in)
   maxTransformBytes: 5_000_000, // larger agent responses pass through untouched
   transform: null,           // optional (text, info) => text hook for agent pages; errors fail open
   knownPaths: [],            // extra real paths for guessed-URL redirects (the sitemap is read too)
@@ -27,6 +27,19 @@ const DEFAULTS = {
   synonyms: {},              // { roaming: ['travel', 'international'] }
   rescueThreshold: 0.34,
   conversions: [],           // [{ name, method, path, value }]
+  facts: [],                 // the site's facts: [{ id, claim, truth, source: '/page', intents: [intentId], blocks: [blockId] }]
+                             // used by the research brief and answer checks (falls back to answerChecks.facts)
+  brief: {
+    enabled: false,          // per-session research brief at /a/{token}{path}, linked from routed sessions' pages
+    path: '/research-brief',
+    title: 'Research summary',
+    linkText: 'Summary of this visit',
+    ctaPath: null,           // e.g. '/signup'; becomes a hand-off link when it matches handoffPaths
+    ctaText: 'Next step',
+    maxFacts: 8,
+    holdout: 0.5,            // share of eligible sessions that never get the link
+    when: {},                // optional extra condition, same shape as a rule's `when` (intents, anyIntents)
+  },
   shadowWindowMs: 30 * 60 * 1000, // collector: group shadow-mode reads by IP hash and user-agent within this window
   cookieName: 'wake_sid',
   cookieDays: 30,
@@ -49,9 +62,22 @@ export function normalizeConfig(c) {
   cfg.search = { ...DEFAULTS.search, ...(c.search || {}) };
   cfg.dashboard = { ...DEFAULTS.dashboard, ...(c.dashboard || {}) };
   cfg.answerChecks = { ...DEFAULTS.answerChecks, ...(c.answerChecks || {}) };
+  cfg.brief = { ...DEFAULTS.brief, ...(c.brief || {}) };
+  if (!Array.isArray(cfg.facts)) throw new Error('wake: facts must be a list');
+  for (const f of cfg.facts) {
+    if (!f?.id || !f.truth) throw new Error(`wake: every fact needs an id and the truth (${JSON.stringify(f)})`);
+    f.blocks = f.blocks || [];
+    if (f.source && !String(f.source).startsWith('/')) throw new Error(`wake: fact "${f.id}" source must be a site path starting with "/"`);
+  }
+  if (!cfg.answerChecks.facts.length && cfg.facts.length) cfg.answerChecks.facts = cfg.facts.filter((f) => f.claim);
   for (const f of cfg.answerChecks.facts) {
     if (!f.id || !f.claim || !f.truth) throw new Error(`wake: every answerChecks fact needs an id, a claim and the truth (${JSON.stringify(f)})`);
     f.blocks = f.blocks || [];
+  }
+  cfg.siteFacts = cfg.facts.length ? cfg.facts : cfg.answerChecks.facts;
+  if (!String(cfg.brief.path).startsWith('/')) throw new Error('wake: brief.path must start with "/"');
+  if (typeof cfg.brief.holdout !== 'number' || !(cfg.brief.holdout >= 0 && cfg.brief.holdout <= 1)) {
+    throw new Error(`wake: brief.holdout must be between 0 and 1 (got ${JSON.stringify(cfg.brief.holdout)})`);
   }
   cfg.upstreamOrigin = cfg.upstream ? new URL(cfg.upstream).origin : null;
   for (const k of ['prefix', 'handoffPrefix']) cfg[k] = '/' + cfg[k].replace(/^\/+|\/+$/g, '');
@@ -70,6 +96,7 @@ export function normalizeConfig(c) {
   for (const r of cfg.rules) {
     if (!r?.id || !r.promote) throw new Error(`wake: every rule needs an id and a promote block (${JSON.stringify(r)})`);
     if (seen.has('rule:' + r.id)) throw new Error(`wake: two rules have the id "${r.id}"`);
+    if (r.id === 'research-brief') throw new Error('wake: the rule id "research-brief" is reserved for the research brief');
     seen.add('rule:' + r.id);
     r.holdout = r.holdout ?? 0.2;
     if (typeof r.holdout !== 'number' || !(r.holdout >= 0 && r.holdout <= 1)) {

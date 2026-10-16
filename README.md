@@ -28,8 +28,10 @@ The SDK has no dependencies and uses only web-standard `Request`/`Response`. The
 - **Kill switch.** `enabled: false` (or `WAKE_DISABLED=1` in a Worker) passes everything through, and old session URLs redirect to the clean page so no link breaks.
 - **Three modes** that match how much the customer trusts it so far:
   - `shadow`: changes nothing. Reports which blocks each page has, and the collector works out which rules would have fired. Reads are grouped into sessions by hashed IP and user-agent.
-  - `trace`: sessions, link rewriting and hand-offs. No content rules, and guessed URLs stay 404 (the likely page is still reported).
-  - `route`: everything.
+  - `trace` (**the default**): sessions, link rewriting and hand-offs, so every agent journey and the conversions it leads to are tracked. Page content is never changed, and guessed URLs stay 404 (the likely page is still reported).
+  - `route` (opt in): everything in `trace`, plus content rules with holdouts, redirects for guessed URLs, and the research brief if `brief.enabled` is set.
+
+  Start with `trace` (or `shadow`), read the data, and only then turn on `route` for the rules you trust.
 - **Privacy.** IPs are hashed before they leave the customer's stack. Search questions have emails, phone numbers and addresses removed.
 
 ## What it does

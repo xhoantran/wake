@@ -81,11 +81,26 @@ export function hasBlock(text, id) {
 }
 
 /**
+ * Insert a snippet at the lead position of a page: after <!-- wake:lead -->, else after <main>,
+ * else after <body>, else (Markdown) after the first heading, else at the top.
+ */
+export function insertAtLead(text, snippet, kind) {
+  const anchors = [/<!--\s*wake:lead\s*-->/i, /<main\b[^>]*>/i, /<body\b[^>]*>/i];
+  if (kind !== 'html') anchors.push(/^#\s+.+$/m);
+  for (const a of anchors) {
+    const am = text.match(a);
+    if (am) {
+      const at = am.index + am[0].length;
+      return text.slice(0, at) + '\n' + snippet + '\n' + text.slice(at);
+    }
+  }
+  return snippet + '\n' + text;
+}
+
+/**
  * Move an existing marked block to the lead position. Content is only moved,
  * never written, so agents see the same facts as people.
  *   <!-- wake:block mexico -->...<!-- /wake:block -->
- * Lead position: after <!-- wake:lead -->, else after <main>, else after <body>,
- * else (Markdown) after the first heading.
  */
 export function promoteBlock(text, id, kind) {
   const re = blockRe(id);
@@ -93,14 +108,5 @@ export function promoteBlock(text, id, kind) {
   if (!m) return { text, applied: false };
   const block = m[0];
   const without = text.slice(0, m.index) + text.slice(m.index + block.length);
-  const anchors = [/<!--\s*wake:lead\s*-->/i, /<main\b[^>]*>/i, /<body\b[^>]*>/i];
-  if (kind !== 'html') anchors.push(/^#\s+.+$/m);
-  for (const a of anchors) {
-    const am = without.match(a);
-    if (am) {
-      const at = am.index + am[0].length;
-      return { text: without.slice(0, at) + '\n' + block + '\n' + without.slice(at), applied: true };
-    }
-  }
-  return { text: block + '\n' + without, applied: true };
+  return { text: insertAtLead(without, block, kind), applied: true };
 }

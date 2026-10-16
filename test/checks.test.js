@@ -27,7 +27,7 @@ before(async () => {
   site = createSite();
   await new Promise((r) => site.listen(0, '127.0.0.1', r));
   store = openStore(':memory:');
-  wake = createWake({ ...structuredClone(baseConfig), upstream: `http://127.0.0.1:${site.address().port}` }, { store });
+  wake = createWake({ ...structuredClone(baseConfig), upstream: `http://127.0.0.1:${site.address().port}`, mode: 'route', brief: { enabled: false } }, { store });
   proxy = await serve(wake, { port: 0, trustProxy: true });
   W = `http://127.0.0.1:${proxy.address().port}`;
 });
@@ -110,7 +110,7 @@ test('answer checks ask the captured questions and the dashboard shows wrong cla
   // Every stored answer is available, verdicts included.
   const list = await (await get('/_wake/api/answers', { ip: '127.0.0.1' })).json();
   assert.equal(list.length, 4);
-  assert.equal(list[0].verdicts.length, baseConfig.answerChecks.facts.length);
+  assert.equal(list[0].verdicts.length, wake.config.answerChecks.facts.length);
 
   const page = await (await get('/_wake/', { ip: '127.0.0.1' })).text();
   assert.ok(page.includes('What agents say vs the truth'));

@@ -20,7 +20,7 @@ before(async () => {
   site = createSite();
   await new Promise((r) => site.listen(0, '127.0.0.1', r));
   const upstream = `http://127.0.0.1:${site.address().port}`;
-  wake = createWake({ ...structuredClone(baseConfig), upstream }, { store: openStore(':memory:') });
+  wake = createWake({ ...structuredClone(baseConfig), upstream, mode: 'route', brief: { enabled: false } }, { store: openStore(':memory:') });
   proxy = await serve(wake, { port: 0, trustProxy: true });
   W = `http://127.0.0.1:${proxy.address().port}`;
 });
@@ -148,7 +148,7 @@ test('search engines and crawlers never keep session URLs', async () => {
 test('shadow mode changes nothing and still groups reads into sessions', async () => {
   const store = openStore(':memory:');
   const upstream = `http://127.0.0.1:${site.address().port}`;
-  const shadow = createWake({ ...structuredClone(baseConfig), upstream, mode: 'shadow' }, { store });
+  const shadow = createWake({ ...structuredClone(baseConfig), upstream, mode: 'shadow', brief: { enabled: false } }, { store });
   const read = (p, ip) => shadow.handle(new Request('http://proxy.test' + p, { headers: { 'user-agent': CHATGPT } }), { ip });
   for (const p of ['/plans/family', '/search?q=family+mexico+travel', '/travel/international-pass']) {
     const viaWake = await (await read(p, '20.9.9.9')).text();
