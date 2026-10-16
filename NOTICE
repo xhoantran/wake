@@ -1,0 +1,11 @@
+Wake
+Copyright 2026 Hoan Tran
+
+Licensing
+
+- Everything in this repository is licensed under the Apache License, Version 2.0
+  (see LICENSE), except the ee/ directory.
+- The ee/ directory ("Wake Enterprise": the hosted, multi-site collector, its
+  Postgres storage, the admin CLI and the Cloudflare collector Worker) is licensed
+  under the Wake Enterprise License (see ee/LICENSE).
+- Third-party components keep their own licenses.

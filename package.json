@@ -14,21 +14,22 @@
     "./worker": "./adapters/worker.js",
     "./collector": "./src/collector.js",
     "./storage": "./src/store.js",
-    "./collector-worker": "./adapters/collector-worker.js"
+    "./ee": "./ee/index.js",
+    "./ee/collector-worker": "./ee/collector-worker.js"
   },
   "scripts": {
-    "test": "node --no-warnings --test test/*.test.js",
+    "test": "node --no-warnings --test test/*.test.js ee/test/*.test.js",
     "example:site": "node --no-warnings examples/meridian/site-server.js",
     "start": "node --no-warnings bin/wake.js --config examples/meridian/wake.config.js",
     "simulate": "node --no-warnings scripts/simulate.js",
-    "test:pg": "WAKE_TEST_PG=${WAKE_TEST_PG:-postgres://postgres@127.0.0.1:5432/postgres} node --no-warnings --test test/*.test.js",
-    "collector:dev": "cd deploy/cloudflare && wrangler dev",
-    "collector:deploy": "cd deploy/cloudflare && wrangler deploy"
+    "test:pg": "WAKE_TEST_PG=${WAKE_TEST_PG:-postgres://postgres@127.0.0.1:5432/postgres} node --no-warnings --test test/*.test.js ee/test/*.test.js",
+    "collector:dev": "cd ee/deploy/cloudflare && wrangler dev",
+    "collector:deploy": "cd ee/deploy/cloudflare && wrangler deploy"
   },
   "engines": {
     "node": ">=22.5"
   },
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN NOTICE",
   "devDependencies": {
     "pg": "^8.23.1",
     "wrangler": "^4.151.1"
@@ -40,5 +41,19 @@
     "pg": {
       "optional": true
     }
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xhoantran/wake.git"
+  },
+  "files": [
+    "src",
+    "adapters",
+    "bin",
+    "ee",
+    "examples",
+    "LICENSE",
+    "NOTICE",
+    "README.md"
+  ]
 }

@@ -3,13 +3,15 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createWake } from '../src/wake.js';
-import { openStore, openStorage } from '../src/store.js';
-import { runAdmin, ADMIN_USAGE } from '../src/admin.js';
-import { createTenants } from '../src/tenants.js';
+import { openStore } from '../src/store.js';
 import { serve } from '../src/node.js';
 import { normalizeConfig } from '../src/config.js';
 import { runChecks } from '../src/checks.js';
 import { createCollector } from '../src/collector.js';
+
+// Multi-site hosting, Postgres and `wake admin` are Wake Enterprise (ee/LICENSE); loaded only when used.
+const ee = () => import('../ee/index.js');
+const ENTERPRISE_NOTE = '(Wake Enterprise: see ee/LICENSE)';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -45,15 +47,17 @@ function usage() {
   console.error('       Proxy that reports to a remote collector.');
   console.error('  wake collector --config wake.config.js --api-key KEY[,KEY2] [--port 8790] [--db wake.db]');
   console.error('       Single-site collector: event ingest, SDK config and the dashboard.');
-  console.error('  wake collector --db postgres://… --secret SECRET [--port 8790]');
+  console.error('  wake collector --db postgres://… --secret SECRET [--port 8790]   ' + ENTERPRISE_NOTE);
   console.error('       Hosted, multi-site collector. Sites, keys and configs come from the database (see wake admin).');
   console.error('  wake check (--config wake.config.js | --site SITE) [--db wake.db] [--engines engines.js]');
-  console.error('  ' + ADMIN_USAGE.replace(/\n/g, '\n  '));
+  console.error('  wake admin …   organizations, sites, API keys and dashboard links ' + ENTERPRISE_NOTE + '; run "wake admin help"');
 }
 
 const secret = values.secret || process.env.WAKE_SECRET || null;
 
 if (command === 'admin') {
+  const { runAdmin, ADMIN_USAGE } = await ee();
+  if (!positionals[1] || positionals[1] === 'help') { console.log(ADMIN_USAGE); process.exit(0); }
   try {
     await runAdmin(positionals.slice(1), values, { loadConfig: async (file) => (await load(file)).default });
   } catch (err) {
@@ -66,7 +70,8 @@ if (command === 'admin') {
     let store = null;
     if (values.site) {
       // One site of a multi-site storage; its saved config unless --config is given.
-      const storage = await openStorage(values.db);
+      const { openHostedStorage, createTenants } = await ee();
+      const storage = await openHostedStorage(values.db);
       store = storage.site(values.site);
       if (!values.config) {
         const entry = await createTenants(storage).getConfig(values.site);
@@ -88,9 +93,13 @@ if (command === 'admin') {
   const apiKeys = String(values['api-key'] || '').split(',').map((k) => k.trim()).filter(Boolean);
   const single = Boolean(values.config);
   if (single && /^postgres/i.test(values.db)) { console.error('A single-site collector uses SQLite. For Postgres, drop --config and manage sites with wake admin.'); process.exit(1); }
-  const collector = single
-    ? createCollector({ config, store: openStore(values.db), apiKeys, secret, log: console.warn })
-    : createCollector({ storage: await openStorage(values.db), secret, log: console.warn });
+  if (single && secret) console.warn('wake: --secret signs dashboard links on a multi-site collector; a single-site collector uses dashboard.token from its config.');
+  let collector;
+  if (single) collector = createCollector({ config, store: openStore(values.db), apiKeys, log: console.warn });
+  else {
+    const { createHostedCollector, openHostedStorage } = await ee();
+    collector = createHostedCollector({ storage: await openHostedStorage(values.db), secret, log: console.warn });
+  }
   await collector.ready;
   const port = values.port === '8787' ? 8790 : Number(values.port);
   await serve(collector, { port, host: values.host, trustProxy: values['trust-proxy'] });
@@ -99,7 +108,9 @@ if (command === 'admin') {
   if (single) console.log(`  Events:    POST ${origin}/v1/events   (${apiKeys.length ? apiKeys.length + ' API key(s)' : 'localhost only, no API key set'})`);
   else console.log(`  Events:    POST ${origin}/v1/events   (API keys from wake admin)`);
   console.log(`  SDK config: GET ${origin}/v1/config`);
-  console.log(`  Dashboard: ${origin}${collector.dashboardPath}/${single ? '' : 'sites/<site>/'}${secret ? '   (open with a link from wake admin token)' : '   (localhost only: no --secret set)'}`);
+  const opens = single ? (config.dashboard?.token ? '   (add ?token=…)' : '   (localhost only: no dashboard.token set)')
+    : secret ? '   (open with a link from wake admin token)' : '   (localhost only: no --secret set)';
+  console.log(`  Dashboard: ${origin}${collector.dashboardPath}/${single ? '' : 'sites/<site>/'}${opens}`);
 } else if (command === 'proxy') {
   const remote = values.endpoint ? { endpoint: values.endpoint, apiKey: values['api-key'] } : { store: openStore(values.db) };
   const wake = createWake(config, remote);

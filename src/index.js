@@ -1,6 +1,6 @@
 export { createWake } from './wake.js';
 export { openStore, openStorage, DEFAULT_SITE } from './store.js';
-export { createTenants } from './tenants.js';
+export { createSiteConfigs, storableConfig, validateConfig, ConfigError } from './site-configs.js';
 export { classifyAgent, AGENTS } from './agents.js';
 export { scoreIntents } from './intent.js';
 export { suggestPath } from './rescue.js';

@@ -1,18 +1,18 @@
+// Wake Enterprise. Licensed under ee/LICENSE, not Apache-2.0.
+//
 // Tenants: organizations own sites, sites own API keys and a versioned config.
 // API keys are shown once and stored as SHA-256 hashes. Dashboard links carry a signed token (HMAC with the
 // collector's secret) for one site or for every site of an organization.
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { normalizeConfig } from './config.js';
-import { flowed } from './flow.js';
-import { DEFAULT_SITE } from './constants.js';
+import { flowed } from '../src/flow.js';
+import { createSiteConfigs, ConfigError, storableConfig, validateConfig } from '../src/site-configs.js';
 
 const DAY = 86_400_000;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
-export class TenantError extends Error {
-  constructor(message, status = 400) { super(message); this.status = status; }
-}
+export { storableConfig, validateConfig };
+export class TenantError extends ConfigError {}
 
 export const newApiKey = () => 'wk_live_' + randomBytes(24).toString('base64url');
 const hintOf = (key) => key.slice(0, 12) + '…' + key.slice(-4);
@@ -28,43 +28,14 @@ function checkId(id, what) {
   return id;
 }
 
-/** What gets stored for a site: plain JSON (functions dropped, regular expressions as their source). */
-export function storableConfig(raw) {
-  return JSON.parse(JSON.stringify(raw || {}, (_k, v) => (v instanceof RegExp ? v.source : v)));
-}
-
-/** Throws TenantError (400) with normalizeConfig's message when the config is not valid. */
-export function validateConfig(raw) {
-  try { return normalizeConfig(structuredClone(raw)); } catch (err) { throw new TenantError(err.message, 400); }
-}
-
 export function createTenants(storage, { secret = null, now = () => Date.now(), keyCacheMs = 30_000, configCacheMs = 5_000 } = {}) {
   const t = storage.tenants;
-  const keyCache = new Map();    // key hash -> { row, at }
-  const configCache = new Map(); // site id -> { entry, at }
+  const configs = createSiteConfigs(storage, { now, configCacheMs });
+  const keyCache = new Map(); // key hash -> { row, at }
 
   function sign(payload) {
     return createHmac('sha256', secret).update(payload).digest('base64url');
   }
-
-  const saveConfig = flowed(function* (siteId, raw, { baseVersion = null, source = 'api' } = {}) {
-    const stored = storableConfig(raw);
-    validateConfig(stored);
-    if (!(yield t.getSite(siteId))) throw new TenantError(`wake: no site "${siteId}"`, 404);
-    const latest = yield t.latestConfig(siteId);
-    const current = latest ? Number(latest.version) : 0;
-    if (baseVersion != null && Number(baseVersion) !== current) {
-      throw new TenantError(`The config changed since you opened it (now version ${current}). Reload and apply your edits again.`, 409);
-    }
-    const version = current + 1;
-    try {
-      yield t.insertConfig({ siteId, version, config: JSON.stringify(stored), source, ts: now() });
-    } catch {
-      throw new TenantError('Someone else saved the config at the same moment. Reload and apply your edits again.', 409);
-    }
-    configCache.delete(siteId);
-    return { version };
-  });
 
   const issueKey = flowed(function* (siteId, { key } = {}) {
     if (!(yield t.getSite(siteId))) throw new TenantError(`wake: no site "${siteId}"`, 404);
@@ -76,6 +47,7 @@ export function createTenants(storage, { secret = null, now = () => Date.now(), 
   });
 
   return {
+    ...configs,
     secret,
 
     createOrg: flowed(function* ({ id, name }) {
@@ -89,18 +61,10 @@ export function createTenants(storage, { secret = null, now = () => Date.now(), 
       if (!(yield t.getOrg(orgId))) throw new TenantError(`wake: no organization "${orgId}"`, 404);
       id = checkId(id || makeId(name, 'site'), 'site');
       yield t.createSite({ id, orgId, name: name || id, ts: now() });
-      const { version } = yield saveConfig(id, config || { name: name || id, mode: 'shadow' }, { source: 'created' });
+      const { version } = yield configs.saveConfig(id, config || { name: name || id, mode: 'shadow' }, { source: 'created' });
       return { id, orgId, name: name || id, version };
     }),
 
-    /** The single-site setup: organization and site "default", created on first use. */
-    ensureDefaultSite: flowed(function* () {
-      if (!(yield t.getOrg(DEFAULT_SITE))) yield t.createOrg({ id: DEFAULT_SITE, name: 'Default', ts: now() });
-      if (!(yield t.getSite(DEFAULT_SITE))) yield t.createSite({ id: DEFAULT_SITE, orgId: DEFAULT_SITE, name: 'Default site', ts: now() });
-      return DEFAULT_SITE;
-    }),
-
-    getSite: (id) => t.getSite(id),
     listSites: (orgId) => t.listSites(orgId),
 
     issueKey,
@@ -137,21 +101,6 @@ export function createTenants(storage, { secret = null, now = () => Date.now(), 
       if (!row || row.revoked_at != null || (row.expires_at != null && Number(row.expires_at) <= now())) return null;
       return { siteId: row.site_id, keyId: row.id };
     }),
-
-    /** The latest config of a site: { version, raw, config (normalized), source, createdAt }, or null. Cached for configCacheMs. */
-    getConfig: flowed(function* (siteId, { fresh = false } = {}) {
-      const hit = configCache.get(siteId);
-      if (hit && !fresh && now() - hit.at <= configCacheMs) return hit.entry;
-      const row = yield t.latestConfig(siteId);
-      const entry = row ? {
-        version: Number(row.version), raw: JSON.parse(row.config), config: normalizeConfig(JSON.parse(row.config)),
-        source: row.source, createdAt: Number(row.created_at),
-      } : null;
-      configCache.set(siteId, { entry, at: now() });
-      return entry;
-    }),
-    saveConfig,
-    configHistory: (siteId, limit) => t.configHistory(siteId, limit),
 
     /** A dashboard token for one site ({ site }) or every site of an organization ({ org }). */
     signToken({ site, org, ttlMs = 30 * DAY }) {

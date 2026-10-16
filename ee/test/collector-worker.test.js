@@ -1,4 +1,5 @@
-// The collector as a Cloudflare Worker (adapters/collector-worker.js).
+// Wake Enterprise (ee/LICENSE).
+// The collector as a Cloudflare Worker (ee/collector-worker.js).
 // The import-graph test always runs. The rest needs Postgres: set WAKE_TEST_PG=postgres://user@host:port/db
 // (each run creates and drops its own database). Hyperdrive is stood in for by a plain connection string,
 // which is what the binding hands the Worker.
@@ -7,13 +8,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import baseConfig from '../examples/meridian/wake.config.js';
-import { createSite } from '../examples/meridian/site-server.js';
-import { createWorker } from '../adapters/worker.js';
-import { createTelemetry } from '../src/sdk/telemetry.js';
-import { tokenFrom } from './helpers.js';
+import baseConfig from '../../examples/meridian/wake.config.js';
+import { createSite } from '../../examples/meridian/site-server.js';
+import { createWorker } from '../../adapters/worker.js';
+import { createTelemetry } from '../../src/sdk/telemetry.js';
+import { tokenFrom } from '../../test/helpers.js';
 
-const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const CHATGPT = 'Mozilla/5.0 AppleWebKit/537.36; compatible; ChatGPT-User/1.0; +https://openai.com/bot';
 const SECRET = 'worker-test-secret';
 
@@ -36,7 +37,7 @@ function importGraph(entry) {
 }
 
 test('Worker bundles never load node:sqlite or the Node http server', () => {
-  for (const entry of ['adapters/collector-worker.js', 'adapters/worker.js', 'deploy/cloudflare/worker.js']) {
+  for (const entry of ['ee/collector-worker.js', 'adapters/worker.js', 'ee/deploy/cloudflare/worker.js']) {
     const g = importGraph(entry);
     assert.ok(!g.external.includes('node:sqlite'), `${entry} reaches node:sqlite via ${g.files.join(', ')}`);
     assert.ok(!g.files.some((f) => f === 'src/storage/sqlite.js' || f === 'src/store.js' || f === 'src/node.js'), `${entry} reaches ${g.files.join(', ')}`);
@@ -66,8 +67,8 @@ describe('collector Worker on Postgres', { skip: !process.env.WAKE_TEST_PG && 's
     url = u.toString();
 
     // What `wake admin` does before the first deploy: migrate, then create an organization, a site and a key.
-    const { openStorage } = await import('../src/store.js');
-    const { createTenants } = await import('../src/tenants.js');
+    const { openHostedStorage: openStorage } = await import('../storage.js');
+    const { createTenants } = await import('../tenants.js');
     const storage = await openStorage(url);
     const tenants = createTenants(storage, { secret: SECRET });
     await tenants.createOrg({ id: 'meridian', name: 'Meridian' });
@@ -82,7 +83,7 @@ describe('collector Worker on Postgres', { skip: !process.env.WAKE_TEST_PG && 's
     await new Promise((r) => site.listen(0, '127.0.0.1', r));
     S = `http://127.0.0.1:${site.address().port}`;
 
-    const { createCollectorWorker } = await import('../adapters/collector-worker.js');
+    const { createCollectorWorker } = await import('../collector-worker.js');
     const fakeEngine = { id: 'fake-assistant', model: 'fake-1', async ask() { return { text: 'Mexico costs $10 a day.' }; } };
     const fakeJudge = { async judge({ facts }) { return facts.map((f) => ({ factId: f.id, verdict: f.id === 'mexico-included' ? 'wrong' : 'missing', quote: 'Mexico costs $10 a day.' })); } };
     worker = createCollectorWorker({ pg, checks: { engines: [fakeEngine], judge: fakeJudge } });
@@ -97,7 +98,7 @@ describe('collector Worker on Postgres', { skip: !process.env.WAKE_TEST_PG && 's
   });
 
   test('without a database binding it answers with a clear error', async () => {
-    const { createCollectorWorker } = await import('../adapters/collector-worker.js');
+    const { createCollectorWorker } = await import('../collector-worker.js');
     const bare = createCollectorWorker({ pg });
     const r = await bare.fetch(new Request('https://collector.test/healthz'), {}, ctx);
     assert.equal(r.status, 500);

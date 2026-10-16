@@ -1,3 +1,5 @@
+// Wake Enterprise. Licensed under ee/LICENSE, not Apache-2.0.
+//
 // Postgres driver: the hosted collector. Takes a connection string (needs the `pg` package, loaded only here)
 // or anything with query(text, params) -> { rows }, such as a pg.Pool you configured yourself.
 // Every call returns a promise. The SQL is shared with SQLite (src/storage/sql.js); "?" becomes $1, $2, ...

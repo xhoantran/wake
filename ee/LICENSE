@@ -1,0 +1,53 @@
+Wake Enterprise License
+
+Copyright (c) 2026 Hoan Tran (the "Licensor")
+
+This license applies to every file in the "ee/" directory of the Wake repository,
+and to any work derived from those files (together, the "Enterprise Software").
+Files outside the "ee/" directory are licensed under the Apache License,
+Version 2.0 (see LICENSE at the root of the repository).
+
+1. Production use requires a subscription.
+   You may use the Enterprise Software in production only if you, and any
+   organization you act for, hold a valid Wake Enterprise subscription or another
+   written agreement with the Licensor that covers that use (a "Subscription"),
+   and only within the limits (such as sites, events and users) that the
+   Subscription sets.
+
+2. Development, testing and evaluation are free.
+   Without a Subscription, you may copy, run and modify the Enterprise Software
+   only to develop and test it, or to evaluate whether to buy a Subscription.
+   You may not use it in production, and you may not use it to serve anyone
+   outside your organization.
+
+3. Modifications.
+   You may modify the Enterprise Software and publish patches to it. If you
+   contribute a modification to the Licensor, the Licensor may use, change and
+   distribute it under any license.
+
+4. Restrictions.
+   Except as this license or a Subscription allows, you may not:
+   (a) copy, merge, publish, distribute, sublicense or sell the Enterprise
+       Software or any work derived from it;
+   (b) offer the Enterprise Software, or any work derived from it, to third
+       parties as a hosted or managed service; or
+   (c) remove, disable or work around any license key, notice or limit in it.
+
+5. Other rights.
+   The Licensor keeps all rights in the Enterprise Software that this license does
+   not expressly grant. This license grants no rights in the Licensor's names,
+   logos or trademarks. Third-party components keep their own licenses.
+
+6. Termination.
+   This license ends automatically if you break any of its terms. When it ends,
+   you must stop using the Enterprise Software and delete your copies of it.
+
+7. No warranty and limited liability.
+   THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+   EVENT SHALL THE LICENSOR OR ANY CONTRIBUTOR BE LIABLE FOR ANY CLAIM, DAMAGES OR
+   OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE ENTERPRISE SOFTWARE OR ITS USE.
+
+To buy a Subscription, contact the Licensor through https://github.com/xhoantran/wake.

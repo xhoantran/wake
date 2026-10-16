@@ -9,7 +9,7 @@ export default {
   handoffPrefix: '/go',
   codePrefix: 'WK',
   handoffPaths: ['/signup', '/sign-up', '/register', '/r/**', '/checkout/**', '/pricing/checkout'],
-  // Ignore a site's own per-visit path codes (new-wave.ai uses /a/NW-XXXXXX/) in analytics.
+  // Example: ignore a site's own per-visit path codes (here /a/NW-XXXXXX/) in analytics.
   pathRewrites: [['^/a/NW-[A-Z0-9]+(?=/|$)', '']],
   aliases: {},
   synonyms: { pricing: ['plans', 'price'], plans: ['pricing'], docs: ['help', 'guide'] },

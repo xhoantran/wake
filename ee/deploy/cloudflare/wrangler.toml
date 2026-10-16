@@ -1,4 +1,4 @@
-# Wake collector on Cloudflare Workers, with Postgres (for example Supabase) through Hyperdrive.
+# Wake Enterprise (ee/LICENSE). Wake collector on Cloudflare Workers, with Postgres (for example Supabase) through Hyperdrive.
 #
 # One-time setup (run from this folder):
 #   1. Apply the schema: from the repo root, any `wake admin` command against the database runs the migrations, e.g.

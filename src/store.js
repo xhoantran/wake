@@ -1,6 +1,6 @@
 // Storage entry points.
 //   openStorage('wake.db')               SQLite, synchronous: local trials and self-hosting
-//   await openStorage('postgres://…')    Postgres: the hosted collector
+//   Postgres is part of Wake Enterprise: ee/storage.js (openHostedStorage)
 // A storage holds every tenant. storage.site(id) is the only way to its sessions and events, and every query
 // it runs is scoped by site_id. storage.tenants manages organizations, sites, API keys and site configs.
 import { openSqlite } from './storage/sqlite.js';
@@ -9,13 +9,13 @@ import { DEFAULT_SITE } from './constants.js';
 
 export { DEFAULT_SITE };
 
-const isPostgres = (target) => typeof target === 'string' ? /^postgres(ql)?:\/\//i.test(target) : typeof target?.query === 'function';
+export const isPostgres = (target) => typeof target === 'string' ? /^postgres(ql)?:\/\//i.test(target) : typeof target?.query === 'function';
 
 const wrap = wrapStorage;
 
-/** A SQLite path (or ':memory:') returns the storage; a postgres:// URL or a pg.Pool returns a promise of it. */
+/** A SQLite path (or ':memory:') returns the storage. */
 export function openStorage(target = ':memory:', options = {}) {
-  if (isPostgres(target)) return import('./storage/postgres.js').then(({ openPostgres }) => openPostgres(target, options)).then(wrap);
+  if (isPostgres(target)) throw new Error('wake: Postgres storage is part of Wake Enterprise; use openHostedStorage from ee/storage.js (see ee/LICENSE)');
   return wrap(openSqlite(target, options));
 }
 

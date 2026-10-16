@@ -1,14 +1,15 @@
-// The Wake collector: the part we host. It receives SDK events, builds sessions, serves each SDK its site's
-// config, and runs the dashboards. Customer sites never wait on it.
+// The Wake collector: it receives SDK events, builds sessions, serves the SDK its config, and runs the dashboard.
+// Customer sites never wait on it.
 //
-// Multi-site (hosted):  createCollector({ storage, secret })   API keys and configs live in the storage.
-// Single-site (local):  createCollector({ config, store, apiKeys })   the config and keys become site "default".
+// Single site:  createCollector({ config, store, apiKeys })   the config and keys become site "default".
+// Many sites:   Wake Enterprise passes a `tenancy` plugin (ee/collector.js: createHostedCollector) that resolves
+//               API keys to sites, verifies signed dashboard links and serves the organization index.
 import { normalizeConfig } from './config.js';
-import { handleSiteDashboard, handleIndex, unauthorized } from './dashboard.js';
+import { handleSiteDashboard, unauthorized } from './dashboard.js';
 import { scoreIntents, intentsSatisfy } from './intent.js';
 import { mintCode, json, matchPath } from './util.js';
 import { flow, flowed, isPromise, createSerial } from './flow.js';
-import { createTenants, storableConfig } from './tenants.js';
+import { createSiteConfigs, storableConfig } from './site-configs.js';
 import { DEFAULT_SITE } from './constants.js';
 import { createRateLimiter, readBody } from './limits.js';
 
@@ -34,18 +35,29 @@ function bearer(request) {
   return (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
 }
 
+/**
+ * tenancy (Wake Enterprise): {
+ *   secret,                       turns off the localhost shortcuts when set
+ *   resolveKey(key)            -> { siteId, keyId } | null   (value or promise)
+ *   verifyToken(token)         -> { s: siteId } | { o: orgId } | null
+ *   handleIndex(request, ctx)  -> Response                    the multi-site front page
+ * }
+ * configs: the site config store to use (defaults to src/site-configs.js; Enterprise passes its tenants).
+ */
 export function createCollector({
-  config, store, storage, apiKeys = [], secret = null, limits = {}, dashboardPath,
-  keyCacheMs, configCacheMs, now = () => Date.now(), log = () => {},
+  config, store, storage, apiKeys = [], tenancy = null, configs = null, limits = {}, dashboardPath,
+  configCacheMs, now = () => Date.now(), log = () => {},
 } = {}) {
   storage = storage || store?.storage;
   if (!storage) throw new Error('wake: createCollector needs a storage (openStorage) or a store (openStore)');
   const single = Boolean(config);
+  if (!single && !tenancy) throw new Error('wake: pass a config for a single-site collector; many sites need Wake Enterprise (ee/collector.js)');
+  const secret = tenancy?.secret || null;
   const defaultSite = single ? store?.siteId || DEFAULT_SITE : null;
   const legacyCfg = single ? normalizeConfig(config) : null; // throws on a bad config, as before
   const dash = dashboardPath || legacyCfg?.dashboard.path || '/_wake';
   const lim = { ...DEFAULT_LIMITS, ...limits };
-  const tenants = createTenants(storage, { secret, now, keyCacheMs, configCacheMs });
+  const siteConfigs = configs || createSiteConfigs(storage, { now, configCacheMs });
   const limiter = createRateLimiter({ perMinute: lim.eventsPerMinute, now });
   const serial = createSerial();
   const legacyKeys = new Set(apiKeys.filter(Boolean));
@@ -53,11 +65,11 @@ export function createCollector({
   // Single-site: make sure site "default" exists and holds the config file's content.
   // A config edited in the dashboard since then wins over the file (see `wake admin config import`).
   const ready = single ? flow((function* () {
-    yield tenants.ensureDefaultSite();
+    yield siteConfigs.ensureDefaultSite();
     const want = storableConfig(config);
-    const current = yield tenants.getConfig(defaultSite, { fresh: true });
+    const current = yield siteConfigs.getConfig(defaultSite, { fresh: true });
     if (!current || (current.source !== 'dashboard' && JSON.stringify(current.raw) !== JSON.stringify(want))) {
-      yield tenants.saveConfig(defaultSite, want, { source: 'file' });
+      yield siteConfigs.saveConfig(defaultSite, want, { source: 'file' });
     } else if (JSON.stringify(current.raw) !== JSON.stringify(want)) {
       log(`wake: site "${defaultSite}" has a config saved in the dashboard (version ${current.version}); the config file is not applied.`);
     }
@@ -66,7 +78,7 @@ export function createCollector({
 
   /** { version, raw, config } for a site; sites without a saved config get the defaults. */
   const siteConfig = flowed(function* (siteId = defaultSite) {
-    const entry = yield tenants.getConfig(siteId);
+    const entry = yield siteConfigs.getConfig(siteId);
     return entry || { version: 0, raw: {}, config: normalizeConfig({}) };
   });
 
@@ -144,7 +156,7 @@ export function createCollector({
   async function authorizeKey(request, ip) {
     const key = bearer(request);
     if (key && legacyKeys.has(key)) return { siteId: defaultSite, keyId: 'flag:' + key.slice(-8) };
-    const hit = key ? await tenants.resolveKey(key) : null;
+    const hit = key && tenancy ? await tenancy.resolveKey(key) : null;
     if (hit) return hit;
     // A single-site collector started without keys (and without a secret) takes events from this machine only.
     if (single && !legacyKeys.size && !secret && LOOPBACK.has(ip)) return { siteId: defaultSite, keyId: 'loopback' };
@@ -186,7 +198,7 @@ export function createCollector({
     const offered = [bearer(request), ...readCookies(request, 'wake_dash')].filter(Boolean);
     for (const token of offered) {
       if (legacyToken && token === legacyToken) return true;
-      const claims = tenants.verifyToken(token);
+      const claims = tenancy?.verifyToken(token);
       if (site && claims && (claims.s === site.id || (claims.o && claims.o === site.org_id))) return true;
     }
     return !legacyToken && !secret && LOOPBACK.has(ip);
@@ -195,17 +207,17 @@ export function createCollector({
   async function handleDashboard(request, url, ip) {
     const rest = url.pathname.slice(dash.length) || '/';
     const m = rest.match(/^\/sites\/([a-z0-9][a-z0-9_-]{0,63})(\/.*)?$/);
-    if (!m && !defaultSite) return handleIndex(request, { url, base: dash, ip, tenants, secret, local: !secret && LOOPBACK.has(ip), readCookies });
+    if (!m && !defaultSite) return tenancy.handleIndex(request, { url, base: dash, ip, secret, local: !secret && LOOPBACK.has(ip), readCookies });
     const siteId = m ? m[1] : defaultSite;
     const base = m ? `${dash}/sites/${siteId}` : dash;
     const sub = m ? m[2] || '/' : rest;
 
-    const site = await tenants.getSite(siteId);
+    const site = await siteConfigs.getSite(siteId);
     const entry = await siteConfig(siteId);
     const legacyToken = entry.config.dashboard.token;
     const linkToken = url.searchParams.get('token');
     if (linkToken && site) {
-      const claims = tenants.verifyToken(linkToken);
+      const claims = tenancy?.verifyToken(linkToken);
       if (linkToken === legacyToken || (claims && (claims.s === site.id || claims.o === site.org_id))) {
         const secure = url.protocol === 'https:' ? '; Secure' : '';
         return new Response(null, { status: 302, headers: { location: base + '/', 'set-cookie': `wake_dash=${linkToken}; Path=${base}; HttpOnly; SameSite=Strict${secure}` } });
@@ -213,7 +225,7 @@ export function createCollector({
     }
     if (!canOpen(request, ip, site, legacyToken)) return unauthorized({ legacyToken, secret });
     if (!site) return json({ error: 'No such site' }, { status: 404 });
-    return handleSiteDashboard(request, { sub, site, entry, store: storage.site(siteId), tenants });
+    return handleSiteDashboard(request, { sub, site, entry, store: storage.site(siteId), configs: siteConfigs });
   }
 
   async function handle(request, { ip } = {}) {
@@ -226,7 +238,7 @@ export function createCollector({
   }
 
   return {
-    handle, ingest, siteConfig, tenants, storage, ready,
+    handle, ingest, siteConfig, configs: siteConfigs, storage, ready,
     config: legacyCfg, store: single ? storage.site(defaultSite) : null, defaultSite, dashboardPath: dash, limits: lim,
   };
 }

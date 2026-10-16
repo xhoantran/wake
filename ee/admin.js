@@ -1,7 +1,9 @@
+// Wake Enterprise. Licensed under ee/LICENSE, not Apache-2.0.
+//
 // `wake admin …`: organizations, sites, API keys, site configs and dashboard links, straight against the storage.
 import { createTenants } from './tenants.js';
-import { openStorage } from './store.js';
-import { TABLES } from './storage/sql.js';
+import { openHostedStorage as openStorage } from './storage.js';
+import { TABLES } from '../src/storage/sql.js';
 
 const HOUR = 3_600_000;
 

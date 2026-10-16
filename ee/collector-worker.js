@@ -1,6 +1,8 @@
+// Wake Enterprise. Licensed under ee/LICENSE, not Apache-2.0.
+//
 // The Wake collector as a Cloudflare Worker, with Postgres (for example Supabase) reached through Hyperdrive.
 //   // worker.js
-//   export { default } from 'wake/collector-worker';
+//   export { default } from 'wake/ee/collector-worker';
 // Bindings and secrets (see deploy/cloudflare/wrangler.toml):
 //   HYPERDRIVE          Hyperdrive binding to the Postgres database (or DATABASE_URL for a direct connection)
 //   WAKE_SECRET         signs dashboard links
@@ -11,8 +13,8 @@
 // Hyperdrive pools connections near the database, so each request opens one cheap client and closes it after the
 // response. AsyncLocalStorage keeps requests that share an isolate on their own clients.
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createCollector } from '../src/collector.js';
-import { openPostgres, pgTypes } from '../src/storage/postgres.js';
+import { createHostedCollector } from './collector.js';
+import { openPostgres, pgTypes } from './storage/postgres.js';
 import { wrapStorage } from '../src/storage/wrap.js';
 import { normalizeConfig } from '../src/config.js';
 import { runChecks, claudeEngine, claudeJudge } from '../src/checks.js';
@@ -46,7 +48,7 @@ export function createCollectorWorker(options = {}) {
         if (!connectionString) throw new Error('wake: bind HYPERDRIVE (or set DATABASE_URL) to the collector Worker');
         if (!pgModule) pgModule = (await import('pg')).default;
         const storage = wrapStorage(await openPostgres(pool, { migrate: false }));
-        const collector = createCollector({ storage, secret: env.WAKE_SECRET || null, limits: options.limits, log: (m) => console.log(m) });
+        const collector = createHostedCollector({ storage, secret: env.WAKE_SECRET || null, limits: options.limits, log: (m) => console.log(m) });
         return { storage, collector };
       })();
       setup.catch(() => { setup = null; }); // retry on the next request

@@ -8,6 +8,8 @@ When a live agent fetches a page, the SDK gives the visit a session code and rew
 
 The SDK has no dependencies and uses only web-standard `Request`/`Response`. The collector needs Node 22.5 or later (it uses the built-in SQLite); the hosted collector on Postgres also needs the `pg` package.
 
+**Open core.** Everything here is Apache-2.0 except `ee/`: the SDK and its adapters, the proxy, a single-site collector with its dashboard, answer checks and the research brief are all free to use and change. `ee/` is **Wake Enterprise**: the hosted, multi-site collector (organizations, API keys, signed dashboard links), Postgres storage, `wake admin` and the Cloudflare collector Worker. It is source-available under `ee/LICENSE`: free for development and evaluation, and production use needs a subscription. See [License](#license).
+
 ## How it stays out of the customer's uptime
 
 ```
@@ -83,7 +85,7 @@ With only `apiKey` and `endpoint`, the SDK pulls its site's config from the coll
 ## Try it locally
 
 ```bash
-npm test                                   # 46 tests (WAKE_TEST_PG=postgres://… adds the hosted tests on Postgres)
+npm test                                   # WAKE_TEST_PG=postgres://… adds the Postgres and collector Worker tests
 PORT=4000 npm run example:site             # fictional example site
 ```
 
@@ -179,9 +181,9 @@ ANTHROPIC_API_KEY=… node bin/wake.js check --config wake.config.js --db wake.d
 
 Conversions can come from a matched request (the response header `x-wake-value` sets the value), from `wake.conversion(request, { name, value })` in your own handler (it reads the hand-off cookie), or from your server: `POST /_wake/api/convert {"code": "...", "name": "order", "value": 120}`.
 
-## Deploy the collector to Cloudflare
+## Deploy the collector to Cloudflare (Wake Enterprise)
 
-The hosted collector runs as a Cloudflare Worker with Postgres (for example Supabase) behind Hyperdrive. Customer sites never call it while serving a page: their SDK pushes batched events to it and pulls its config about once a minute.
+The hosted collector (`ee/`, see `ee/LICENSE`) runs as a Cloudflare Worker with Postgres (for example Supabase) behind Hyperdrive. Customer sites never call it while serving a page: their SDK pushes batched events to it and pulls its config about once a minute.
 
 ```
 visitors ─> customer's Cloudflare account: Wake SDK Worker ─> customer's site (unchanged)
@@ -199,7 +201,7 @@ visitors ─> customer's Cloudflare account: Wake SDK Worker ─> customer's sit
    node bin/wake.js admin site create --db "postgres://…" --org acme --name "Acme web" --config wake.config.js
    ```
    Use the database's direct connection string for these commands.
-2. Create a Hyperdrive config for the same database and put its id in `deploy/cloudflare/wrangler.toml`:
+2. Create a Hyperdrive config for the same database and put its id in `ee/deploy/cloudflare/wrangler.toml`:
    ```bash
    npx wrangler hyperdrive create wake-db --connection-string="postgres://…"
    ```
@@ -221,11 +223,11 @@ The Worker never migrates the database, so a cold start never takes a lock. Each
 - `GET /v1/config`: the key's site config for SDKs, with its `version`, and without the dashboard token, answer-check settings or `upstream`. Sends an `ETag`; `If-None-Match` gets `304` while the version is unchanged.
 - `/_wake/sites/<site>/`: one site's dashboard on a multi-site collector. `/_wake/` on a single-site collector. `GET /healthz` for uptime checks.
 
-`createCollector({ storage, secret })` (multi-site) or `createCollector({ config, store, apiKeys })` (single site) returns `handle(request)` and `ingest(events, { siteId })` for embedding.
+`createCollector({ config, store, apiKeys })` (single site, Apache-2.0) and `createHostedCollector({ storage, secret })` from `wake/ee` (many sites, Wake Enterprise) return `handle(request)` and `ingest(events, { siteId })` for embedding.
 
-## Hosted collector
+## Hosted collector (Wake Enterprise)
 
-One collector process serves many customers. An organization owns sites; each site has its own API keys, a versioned config, its sessions and its dashboard.
+This section is the `ee/` code, licensed under `ee/LICENSE`. One collector process serves many customers. An organization owns sites; each site has its own API keys, a versioned config, its sessions and its dashboard.
 
 ```
 organization ── site ─┬─ API keys          stored as SHA-256 hashes; rotate with a grace period
@@ -246,7 +248,7 @@ node bin/wake.js admin token --site acme-shop-4f2a1c --url https://collector.exa
 
 `node bin/wake.js admin` lists every command: sites, keys (`create`, `import`, `rotate`, `revoke`), configs (`import`, `show`), dashboard links and `copy`.
 
-- **Storage.** `src/storage/sql.js` is the storage interface: one set of SQL for both databases, and `storage.site(id)` is the only way to session data, so every query is scoped by `site_id`. SQLite (`src/storage/sqlite.js`) stays for local and self-hosted use; Postgres (`src/storage/postgres.js`) is for the hosted service. No ORM; `pg` is loaded only for a `postgres://` URL, so the SDK and SQLite users don't need it. Migrations run at startup and are recorded in `schema_migrations` (Postgres takes an advisory lock, so two collectors starting together don't race). Indexes lead with `site_id`: `events (site_id, code, ts)`, `events (site_id, ts)`, `events (site_id, type, ts)`, `sessions (site_id, created_at)`, `sessions (site_id, last_seen)`, `exposures (site_id, ts)`.
+- **Storage.** `src/storage/sql.js` is the storage interface: one set of SQL for both databases, and `storage.site(id)` is the only way to session data, so every query is scoped by `site_id`. SQLite (`src/storage/sqlite.js`) stays for local and self-hosted use; Postgres (`ee/storage/postgres.js`) is for the hosted service. No ORM; `pg` is loaded only for a `postgres://` URL, so the SDK and SQLite users don't need it. Migrations run at startup and are recorded in `schema_migrations` (Postgres takes an advisory lock, so two collectors starting together don't race). Indexes lead with `site_id`: `events (site_id, code, ts)`, `events (site_id, ts)`, `events (site_id, type, ts)`, `sessions (site_id, created_at)`, `sessions (site_id, last_seen)`, `exposures (site_id, ts)`.
 - **API keys.** `wk_live_…`, shown once. `key rotate` issues a new key and lets the site's other keys run out after a grace period (24 hours by default), so installs can be redeployed without losing events. `key revoke` stops a key at once on the collector that ran it; other collectors cache key lookups for up to 30 seconds.
 - **Config editing.** The dashboard's Config tab edits the mode (Observe = `shadow`, Trace, Route), intents, blocks and rules, including each rule's holdout share. Every save is validated with `normalizeConfig` and stored as a new version; a save based on an older version is refused (`409`) rather than overwriting someone else's edit. Settings the tab doesn't show stay as they were. SDKs get the new version on their next background refresh (about a minute); a collector caches each site's config for 5 seconds.
 - **Dashboard access.** With a secret (`--secret` or `WAKE_SECRET`), dashboards open only with a signed link from `wake admin token`: for one site (`--site`) or every site of an organization (`--org`), valid for 30 days (`--days`). The link sets an `HttpOnly`, `SameSite=Strict` cookie scoped to that site's path. A hosted collector has no localhost exception, because behind a reverse proxy every request can look local. Without a secret, the local rule stays: dashboards open on localhost only (or with the site's `dashboard.token`). Links can't be withdrawn one by one; changing the secret signs everyone out.
@@ -283,12 +285,14 @@ Each link opens only its own site: East shows 150 sessions, West 60. Switch West
 
 ## Tested
 
-- 46 tests in `test/`: agent detection, codes and URL tokens, link rewriting (HTML, Markdown, absolute and relative links, assets, `<link>` tags), block promotion, intents, URL rescue, statistics, redaction, and full HTTP journeys through a real site server. The journeys cover the agent's first read, search, a rescued 404, a routed and a held-out rule decided from the URL token alone, the agent checking its own link, a person's hand-off and order, crawlers, a forwarded session link, an unreachable site, and dashboard access.
+- Tests in `test/` (Apache-2.0 core) and `ee/test/` (Enterprise). Core: agent detection, codes and URL tokens, link rewriting (HTML, Markdown, absolute and relative links, assets, `<link>` tags), block promotion, intents, URL rescue, statistics, redaction, and full HTTP journeys through a real site server. The journeys cover the agent's first read, search, a rescued 404, a routed and a held-out rule decided from the URL token alone, the agent checking its own link, a person's hand-off and order, crawlers, a forwarded session link, an unreachable site, and dashboard access.
 - The SDK setup: Node middleware in an app sending a whole journey over HTTP to a separate collector; the collector down (pages still served, events dropped); config pulled from the collector; wrong API keys refused and secrets kept out of the served config; kill switch; shadow mode returning byte-identical pages while still grouping sessions; trace mode; fail-open on an error; the Worker and Next.js adapters; telemetry batching and buffer limits.
+- The license boundary: nothing outside `ee/` imports from it, and every `ee/` source file carries the enterprise header.
+- The collector Worker (with `WAKE_TEST_PG`): config and ingest per API key, a separate database client for each of 12 concurrent requests with none left open, signed dashboard links, an SDK Worker sending a real journey to it, and the cron answer checks. It also ran in the Workers runtime with `wrangler dev` against Postgres, and an import-graph test keeps `node:sqlite` out of Worker bundles.
 - The hosted collector, on SQLite and (with `WAKE_TEST_PG`) on Postgres: two sites never see each other's sessions, events or configs, even with the same session code; signed site and organization links, forged and expired links refused; key rotation with a grace period and revocation; a config saved in the dashboard reaching an SDK through `createConfigSource` (with a `304` when unchanged), invalid and stale saves refused; per-key rate limits, the payload cap with and without `Content-Length`, and event age. A single-site database from before sites existed opens as site `default`.
 - Answer checks with fake assistants and a fake judge: captured questions are asked, wrong claims reach the dashboard with the rule and holdout numbers for their block, failures are recorded, the Claude engine and judge send the right requests (to a fake `fetch`), and `wake check` runs from the command line. No test calls a paid API.
 - 400 simulated sessions through the example site, with the proxy and the collector as separate processes. Every report fills in.
-- Live, in front of https://www.new-wave.ai. Sessions held across pages, the site's own `/a/NW-…` links nested correctly, the site's absolute `/r/NW-…` sign-up links became hand-off links, and the canonical tag was preserved. Agents guessing `/pricing` get a 404 there today.
+- Live, in front of a production marketing site: sessions held across pages, the site's own path codes nested correctly, its absolute sign-up links became hand-off links, and its canonical tag was preserved.
 
 ## Known gaps
 
@@ -301,3 +305,9 @@ Each link opens only its own site: East shows 150 sessions, West 60. Switch West
 - HTML rewriting is regex-based and only handles quoted `href`/`action` on `<a>`, `<area>` and `<form>`. Links built by client-side JavaScript aren't rewritten.
 - Answer checks ship with a Claude engine only. ChatGPT, Perplexity and others need an engine adapter (see above). The judge is also an LLM, so read the quotes before you act on a verdict.
 - Each answer is judged against every fact, so facts the question never touched show as "not mentioned".
+
+## License
+
+- Everything outside `ee/` is licensed under the [Apache License, Version 2.0](LICENSE).
+- `ee/` (Wake Enterprise) is licensed under the [Wake Enterprise License](ee/LICENSE): you may read, modify and run it for development, testing and evaluation; production use requires a subscription.
+- See [NOTICE](NOTICE). Contributions follow the license of the code they change ([CONTRIBUTING.md](CONTRIBUTING.md)). Report security issues privately ([SECURITY.md](SECURITY.md)).
