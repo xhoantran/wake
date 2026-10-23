@@ -8,6 +8,7 @@ import { serve } from '../src/node.js';
 import { normalizeConfig } from '../src/config.js';
 import { runChecks } from '../src/checks.js';
 import { createCollector } from '../src/collector.js';
+import { verifySite, formatReport } from '../src/verify.js';
 
 // Multi-site hosting, Postgres and `wake admin` are Wake Enterprise (ee/LICENSE); loaded only when used.
 const ee = () => import('../ee/index.js');
@@ -28,6 +29,8 @@ const { values, positionals } = parseArgs({
     engines: { type: 'string' }, // check: module exporting { engines, judge } that replace the config's
     endpoint: { type: 'string' }, // proxy: remote collector URL
     'api-key': { type: 'string' }, // proxy: key for the remote collector; collector: accepted key(s), comma-separated
+    path: { type: 'string' }, // verify: page to start from (default: the URL's own path)
+    json: { type: 'boolean', default: false }, // verify: print the report as JSON
   },
 });
 
@@ -36,6 +39,15 @@ let config = {};
 if (values.config) config = (await load(values.config)).default;
 if (values.upstream) config = { ...config, upstream: values.upstream };
 const command = positionals[0] || 'proxy';
+if (command === 'verify') {
+  if (!positionals[1]) { usage(); process.exit(1); }
+  let url;
+  try { url = new URL(positionals[1].includes('://') ? positionals[1] : 'https://' + positionals[1]); } catch { console.error(`Not a URL: ${positionals[1]}`); process.exit(1); }
+  if (values.path) url = new URL(values.path, url);
+  const report = await verifySite({ url, endpoint: values.endpoint || process.env.WAKE_ENDPOINT || null, apiKey: values['api-key'] || process.env.WAKE_API_KEY || null });
+  console.log(values.json ? JSON.stringify(report, null, 2) : formatReport(report));
+  process.exit(report.ok ? 0 : 1);
+}
 if (!values.config && command === 'check' && !values.site) { usage(); process.exit(1); }
 if (command === 'proxy' && !config.upstream) { usage(); process.exit(1); }
 
@@ -50,6 +62,8 @@ function usage() {
   console.error('  wake collector --db postgres://… --secret SECRET [--port 8790]   ' + ENTERPRISE_NOTE);
   console.error('       Hosted, multi-site collector. Sites, keys and configs come from the database (see wake admin).');
   console.error('  wake check (--config wake.config.js | --site SITE) [--db wake.db] [--engines engines.js]');
+  console.error('  wake verify https://www.example.com [--path /pricing] [--endpoint https://collector --api-key KEY] [--json]');
+  console.error('       Check a live site: people untouched, agent sessions and links, hand-offs, delivery to the collector.');
   console.error('  wake admin …   organizations, sites, API keys and dashboard links ' + ENTERPRISE_NOTE + '; run "wake admin help"');
 }
 
@@ -121,6 +135,6 @@ if (command === 'admin') {
   if (values.endpoint) console.log(`  Events go to ${values.endpoint}`);
   else console.log(`  Dashboard: ${origin}${wake.config.dashboard.path}/${wake.config.dashboard.token ? '?token=…' : ''}`);
 } else {
-  console.error(`Unknown command "${command}". Commands: proxy, collector, check, admin`);
+  console.error(`Unknown command "${command}". Commands: proxy, collector, check, verify, admin`);
   process.exit(1);
 }

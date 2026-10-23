@@ -125,6 +125,7 @@ A config is a plain object (a JS module for the CLI). It can live in the collect
 ```js
 export default {
   mode: 'trace',                                 // shadow | trace | route
+  carrier: 'path',                               // path (/a/{code}/page) | query (/page?wk={code}) | split
   codePrefix: 'EX',
   handoffPaths: ['/signup', '/checkout/**'],     // links that become hand-off links
   intents: [{ id: 'pricing', label: 'Comparing prices', paths: ['/pricing'], keywords: ['price', 'cost'] }],
@@ -137,6 +138,20 @@ export default {
   dashboard: { token: process.env.WAKE_TOKEN },  // without a token the dashboard only opens on localhost
 };
 ```
+
+### Where the session code goes
+
+`carrier` decides how links on agent pages carry the session code:
+
+| `carrier` | Session link | Sign-up link | Good to know |
+|---|---|---|---|
+| `path` (default) | `/a/WK-7K2Q9P.3/plans` | `/r/WK-7K2Q9P.3/signup` | The code looks like part of the page address |
+| `query` | `/plans?wk=WK-7K2Q9P.3` | `/signup?wkh=WK-7K2Q9P.3` | The site's routes never change; old links still work if Wake is removed |
+| `split` | half the sessions each way | | The dashboard compares hand-off and conversion rates ("link-carrier") |
+
+Wake reads both forms on every request whatever `carrier` is set to, so switching never breaks links already handed out, and it always strips its own parameters before the site sees the request. Rename the parts with `prefix` / `handoffPrefix` and `param` / `handoffParam`.
+
+Which form agents keep more often when they show a link to the person is not known yet. `split` measures it on your own traffic.
 
 Mark blocks that rules may move, in HTML or Markdown:
 
@@ -220,10 +235,36 @@ The Worker never migrates the database, so a cold start never takes a lock. Each
 ## Collector API
 
 - `POST /v1/events` with `Authorization: Bearer <api key>` and `{ "events": [...] }`. The key decides the site the events are written to. Returns `202 { accepted, ignored, rejected }`: only an agent's own read can start a session, so other events with an unknown code are ignored; events older than 7 days or dated in the future are rejected. `401` for an unknown, revoked or expired key, `413` over 1,000 events or 1 MB, `429` with `Retry-After` over the key's rate limit.
+- `GET /v1/probes/<id>`: what the collector received from one `wake verify` run (see below), for the key's site only.
 - `GET /v1/config`: the key's site config for SDKs, with its `version`, and without the dashboard token, answer-check settings or `upstream`. Sends an `ETag`; `If-None-Match` gets `304` while the version is unchanged.
 - `/_wake/sites/<site>/`: one site's dashboard on a multi-site collector. `/_wake/` on a single-site collector. `GET /healthz` for uptime checks.
 
 `createCollector({ config, store, apiKeys })` (single site, Apache-2.0) and `createHostedCollector({ storage, secret })` from `wake/ee` (many sites, Wake Enterprise) return `handle(request)` and `ingest(events, { siteId })` for embedding.
+
+## Verify an install
+
+```bash
+npx wake verify https://www.example.com --path /pricing --endpoint https://collector.example.com --api-key "$WAKE_API_KEY"
+```
+
+`wake verify` visits the site as a person, as an AI agent and as a search crawler, then reports each check as passed, failed, a warning or skipped. It exits with 1 when any check fails, so it can run in CI after a deploy. Add `--json` for a machine-readable report.
+
+| Check | What it looks at |
+|---|---|
+| The site answers | A person's request gets a non-error response |
+| People get the page without Wake | No Wake headers or session cookie for a person |
+| Wake runs on this page | The SDK answers an agent and reports its mode and carrier |
+| The agent gets a session | A valid session code (trace and route) |
+| Links carry the session code | Every same-site link on the agent's page, with the ones missing it listed |
+| Links to other sites are left alone | Outside links don't carry the code (a warning names any host that does, which is fine for your own other sites) |
+| Agent pages are never cached for others | `cache-control: private` or `no-store` |
+| The canonical URL stays clean | No session code in `rel="canonical"` |
+| The session follows the agent | The next page keeps the same session |
+| Search crawlers get the clean URL | A crawler opening a session link gets a `301` to the clean URL |
+| A person on the sign-up link is credited | The agent's link check gets a `307`, a person gets a `302` and the session cookie |
+| Events reach the collector | With `--endpoint` and `--api-key`: this run's visits arrived |
+
+It identifies itself honestly, as `Wake-Verify/1.0`, which the SDK treats as a live agent. Every request carries `x-wake-verify: <probe id>`. The SDK then adds `x-wake-mode` and `x-wake-carrier` headers for it (real visitors never get them), and the collector files the run's events under the probe id instead of creating sessions, so verify runs never show up in reports. In shadow mode it checks that agent pages stay unchanged and skips the session checks.
 
 ## Hosted collector (Wake Enterprise)
 
@@ -291,6 +332,8 @@ Each link opens only its own site: East shows 150 sessions, West 60. Switch West
 - The collector Worker (with `WAKE_TEST_PG`): config and ingest per API key, a separate database client for each of 12 concurrent requests with none left open, signed dashboard links, an SDK Worker sending a real journey to it, and the cron answer checks. It also ran in the Workers runtime with `wrangler dev` against Postgres, and an import-graph test keeps `node:sqlite` out of Worker bundles.
 - The hosted collector, on SQLite and (with `WAKE_TEST_PG`) on Postgres: two sites never see each other's sessions, events or configs, even with the same session code; signed site and organization links, forged and expired links refused; key rotation with a grace period and revocation; a config saved in the dashboard reaching an SDK through `createConfigSource` (with a `304` when unchanged), invalid and stale saves refused; per-key rate limits, the payload cap with and without `Content-Length`, and event age. A single-site database from before sites existed opens as site `default`.
 - Answer checks with fake assistants and a fake judge: captured questions are asked, wrong claims reach the dashboard with the rule and holdout numbers for their block, failures are recorded, the Claude engine and judge send the right requests (to a fake `fetch`), and `wake check` runs from the command line. No test calls a paid API.
+- Carriers: query helpers that keep the rest of a query exactly as written (including `&amp;` in HTML), both forms read on every request, the site never seeing Wake's parameters, a full query-carrier journey with a hand-off, crawlers and forwarded links, switching carriers without breaking old links, the kill switch, and the split test reaching the dashboard.
+- `wake verify` against real installs (path and query carriers, shadow mode) with a real collector, against a site without Wake, a wrong API key and a broken install (public caching, a code in the canonical URL, outside links with the code, a lost session). Probe visits never become sessions.
 - 400 simulated sessions through the example site, with the proxy and the collector as separate processes. Every report fills in.
 - Live, in front of a production marketing site: sessions held across pages, the site's own path codes nested correctly, its absolute sign-up links became hand-off links, and its canonical tag was preserved.
 

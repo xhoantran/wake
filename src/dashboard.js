@@ -165,18 +165,21 @@ function table(head, rows, right) {
     + rows.map((r) => '<tr>' + r.map((c, i) => '<td class="' + (right[i] ? 'r' : '') + '">' + c + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>';
 }
 function expVerdict(e) {
+  const [a, b] = e.arms || ['Routed', 'Holdout'];
   return !e.handoff.enough ? '<span class="pill wait">Needs 30+ sessions per group</span>'
-    : e.handoff.low > 0 ? '<span class="pill ok">Routed wins</span>' : e.handoff.high < 0 ? '<span class="pill no">Holdout wins</span>' : '<span class="pill go">No clear difference yet</span>';
+    : e.handoff.low > 0 ? '<span class="pill ok">' + a + ' wins</span>' : e.handoff.high < 0 ? '<span class="pill no">' + b + ' wins</span>' : '<span class="pill go">No clear difference yet</span>';
 }
 function expView(e) {
   const m = Math.max(0.0001, e.handoff.routed, e.handoff.holdout);
   const verdict = expVerdict(e);
+  const [a, b] = e.arms || ['Routed', 'Holdout'];
   return '<div class="exp"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><b>' + esc(e.id) + '</b>' + verdict + '</div>'
-    + '<span class="small">' + (e.kind === 'brief' ? 'Adds: ' : 'Leads with: ') + esc(e.label) + ' · ' + pct(e.holdoutShare, 0) + ' held out</span>'
+    + '<span class="small">' + (e.kind === 'carrier' ? 'Compares: ' + esc(e.label) + ' · half the sessions each'
+      : (e.kind === 'brief' ? 'Adds: ' : 'Leads with: ') + esc(e.label) + ' · ' + pct(e.holdoutShare, 0) + ' held out') + '</span>'
     + (e.kind === 'brief' ? '<span class="small">Opened the summary: ' + num(e.routed.opened) + ' of ' + num(e.routed.n) + ' routed sessions (' + pct(e.routed.n ? e.routed.opened / e.routed.n : 0) + ')</span>' : '')
-    + arm('Routed', 'routed', e.routed, e.handoff.routed, e.conversion.routed, m)
-    + arm('Holdout', 'holdout', e.holdout, e.handoff.holdout, e.conversion.holdout, m)
-    + '<span class="small">Take-over rate difference ' + (e.handoff.diff >= 0 ? '+' : '') + pct(e.handoff.diff) + ' (95% interval ' + pct(e.handoff.low) + ' to ' + pct(e.handoff.high) + '). Conversion difference ' + (e.conversion.diff >= 0 ? '+' : '') + pct(e.conversion.diff) + '.</span></div>';
+    + arm(a, 'routed', e.routed, e.handoff.routed, e.conversion.routed, m)
+    + arm(b, 'holdout', e.holdout, e.handoff.holdout, e.conversion.holdout, m)
+    + '<span class="small">' + (e.kind === 'carrier' ? a + ' minus ' + b + ': take-over rate ' : 'Take-over rate difference ') + (e.handoff.diff >= 0 ? '+' : '') + pct(e.handoff.diff) + ' (95% interval ' + pct(e.handoff.low) + ' to ' + pct(e.handoff.high) + '). Conversion difference ' + (e.conversion.diff >= 0 ? '+' : '') + pct(e.conversion.diff) + '.</span></div>';
 }
 function answersView(a) {
   if (!a) return '<p class="empty">No answer checks yet. Add <span class="mono">answerChecks.facts</span> to the config and run <span class="mono">wake check --config …</span>.</p>';

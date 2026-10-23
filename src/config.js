@@ -10,8 +10,15 @@ const DEFAULTS = {
   botSampleRate: 1,          // share of crawler requests reported
   publicOrigin: null,        // the site's public origin, used for canonical links (defaults to the request origin)
   sameSiteOrigins: [],       // other origins that count as this site when rewriting absolute links
+  carrier: 'path',           // how links carry the session code:
+                             //   path  = /a/{code}/page   (prefix, handoffPrefix)
+                             //   query = /page?wk={code}  (param, handoffParam); the site's routes never change
+                             //   split = half the sessions each, compared on the dashboard ("link-carrier")
+                             // Incoming links are read in both forms whatever this is set to.
   prefix: '/a',              // agent session path:   /a/{code}/...
   handoffPrefix: '/r',       // person-takes-over path: /r/{code}/...
+  param: 'wk',               // agent session query parameter:   ?wk={code}
+  handoffParam: 'wkh',       // person-takes-over query parameter: ?wkh={code}
   codePrefix: 'WK',
   trackKinds: ['live'],      // agent kinds that get sessions; index and training crawlers must not
   handoffPaths: [],          // pages whose links should become /r/ links (sign-up, checkout)
@@ -81,6 +88,11 @@ export function normalizeConfig(c) {
   }
   cfg.upstreamOrigin = cfg.upstream ? new URL(cfg.upstream).origin : null;
   for (const k of ['prefix', 'handoffPrefix']) cfg[k] = '/' + cfg[k].replace(/^\/+|\/+$/g, '');
+  if (!['path', 'query', 'split'].includes(cfg.carrier)) throw new Error(`wake: carrier must be path, query or split (got ${cfg.carrier})`);
+  for (const k of ['param', 'handoffParam']) {
+    if (typeof cfg[k] !== 'string' || !/^[a-z][a-z0-9_]{0,15}$/i.test(cfg[k])) throw new Error(`wake: ${k} must be a short name of letters, digits and _ (got ${JSON.stringify(cfg[k])})`);
+  }
+  if (cfg.param === cfg.handoffParam) throw new Error('wake: param and handoffParam must differ');
   if (!Array.isArray(cfg.intents)) throw new Error('wake: intents must be a list');
   if (!Array.isArray(cfg.rules)) throw new Error('wake: rules must be a list');
   if (!cfg.blocks || typeof cfg.blocks !== 'object' || Array.isArray(cfg.blocks)) throw new Error('wake: blocks must be an object of { blockId: summary }');
@@ -97,6 +109,7 @@ export function normalizeConfig(c) {
     if (!r?.id || !r.promote) throw new Error(`wake: every rule needs an id and a promote block (${JSON.stringify(r)})`);
     if (seen.has('rule:' + r.id)) throw new Error(`wake: two rules have the id "${r.id}"`);
     if (r.id === 'research-brief') throw new Error('wake: the rule id "research-brief" is reserved for the research brief');
+    if (r.id === 'link-carrier') throw new Error('wake: the rule id "link-carrier" is reserved for the carrier split test');
     seen.add('rule:' + r.id);
     r.holdout = r.holdout ?? 0.2;
     if (typeof r.holdout !== 'number' || !(r.holdout >= 0 && r.holdout <= 1)) {

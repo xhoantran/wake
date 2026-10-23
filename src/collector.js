@@ -16,6 +16,7 @@ import { createRateLimiter, readBody } from './limits.js';
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
 const TYPES = new Set(['fetch', 'rescue', 'not_found', 'handoff', 'link_check', 'shared', 'conversion', 'bot', 'error', 'brief']);
 const DAY = 86_400_000;
+const PROBE_RE = /^VF-[A-Z0-9]{4,16}$/; // `wake verify` probe ids
 
 export const DEFAULT_LIMITS = {
   maxEvents: 1000,              // events per POST /v1/events
@@ -96,6 +97,13 @@ export function createCollector({
     if (!ev || !TYPES.has(ev.type) || !Number.isFinite(ev.ts)) return 'ignored';
     if (ev.ts < t - lim.maxEventAgeMs || ev.ts > t + lim.maxClockSkewMs) return 'rejected';
     ev = { ...ev, ts: Math.trunc(ev.ts) };
+    if (ev.probe != null) {
+      // A `wake verify` request: kept under its probe id so it never becomes a session or reaches a report.
+      if (!PROBE_RE.test(String(ev.probe))) return 'ignored';
+      yield store.addEvent({ ts: ev.ts, code: ev.probe, type: 'probe', actor: ev.actor, agent: ev.agent, vendor: ev.vendor, method: ev.method,
+        path: ev.path, status: ev.status, data: { type: ev.type, code: ev.code ?? null, ...(ev.data?.via ? { via: ev.data.via } : {}), ...(ev.data?.carrier ? { carrier: ev.data.carrier } : {}) } });
+      return 'accepted';
+    }
     const row = {
       ts: ev.ts, type: ev.type, actor: ev.actor, agent: ev.agent, vendor: ev.vendor, ip: ev.ipHash, ua: ev.ua,
       method: ev.method, path: ev.path, query: ev.query, status: ev.status, title: ev.title, data: ev.data,
@@ -174,6 +182,14 @@ export function createCollector({
       return json(publicConfig(entry.raw, entry.version), { headers: { etag, 'cache-control': 'no-cache' } });
     }
 
+    const probe = url.pathname.match(/^\/v1\/probes\/([^/]{1,64})$/);
+    if (probe && request.method === 'GET') {
+      // What the collector received from one `wake verify` run, for this API key's site only.
+      if (!PROBE_RE.test(probe[1])) return json({ error: 'Not a probe id' }, { status: 400 });
+      const events = await storage.site(who.siteId).events(probe[1]);
+      return json({ probe: probe[1], events: events.map((e) => ({ ts: e.ts, type: e.data?.type, code: e.data?.code, actor: e.actor, agent: e.agent, path: e.path, status: e.status, via: e.data?.via, carrier: e.data?.carrier })) });
+    }
+
     if (url.pathname === '/v1/events' && request.method === 'POST') {
       const tooFast = (ms, limit) => json({ error: `Rate limit: ${limit} events per minute for this API key. Retry later.` },
         { status: 429, headers: { 'retry-after': String(Math.max(1, Math.ceil(ms / 1000))) } });
@@ -232,7 +248,7 @@ export function createCollector({
     const url = new URL(request.url);
     if (url.pathname === '/healthz') return json({ ok: true });
     const isDash = url.pathname === dash || url.pathname.startsWith(dash + '/');
-    if (!isDash && url.pathname !== '/v1/events' && url.pathname !== '/v1/config') return json({ error: 'Not found' }, { status: 404 });
+    if (!isDash && url.pathname !== '/v1/events' && url.pathname !== '/v1/config' && !url.pathname.startsWith('/v1/probes/')) return json({ error: 'Not found' }, { status: 404 });
     if (isPromise(ready)) await ready;
     return isDash ? handleDashboard(request, url, ip) : handleApi(request, url, ip);
   }

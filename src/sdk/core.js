@@ -2,8 +2,8 @@
 // Every decision is local: config comes from a cached source, session state comes from the URL token,
 // and events go out through telemetry after the response. Any error falls back to the original response.
 import { classifyAgent } from '../agents.js';
-import { mintCode, parsePrefixed, matchPath, unitHash, redact, readCookie, hashIp } from '../util.js';
-import { makeUrlRewriter, rewriteHtml, rewriteMarkdown, extractTitle, ensureCanonical, hasBlock, promoteBlock, listBlocks, insertAtLead } from '../rewrite.js';
+import { mintCode, readSession, matchPath, unitHash, redact, readCookie, hashIp } from '../util.js';
+import { makeUrlRewriter, sessionHref, rewriteHtml, rewriteMarkdown, extractTitle, ensureCanonical, hasBlock, promoteBlock, listBlocks, insertAtLead } from '../rewrite.js';
 import { scoreIntents, intentsSatisfy } from '../intent.js';
 import { suggestPath, parseSitemap } from '../rescue.js';
 import { decodeState, formatToken } from './token.js';
@@ -11,6 +11,14 @@ import { BRIEF_RULE, briefEligible, briefLink, renderBrief, selectFacts } from '
 
 const HOP_HEADERS = ['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive'];
 const NULL_BODY = new Set([101, 204, 205, 304]);
+const PROBE_RE = /^VF-[A-Z0-9]{4,16}$/; // x-wake-verify: requests made by `wake verify`
+export const CARRIER_TEST = 'link-carrier';
+
+/** The carrier a session's links use. With carrier "split" each session gets one for good, by its code. */
+export function carrierFor(cfg, code) {
+  if (cfg.carrier !== 'split') return cfg.carrier;
+  return unitHash(`${code}:${CARRIER_TEST}`) < 0.5 ? 'query' : 'path';
+}
 
 export function textKind(contentType, path) {
   const ct = (contentType || '').toLowerCase();
@@ -74,9 +82,9 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     return `${cfg.cookieName}=${encodeURIComponent(code)}; Path=/; Max-Age=${cfg.cookieDays * 86400}; HttpOnly; SameSite=Lax`;
   }
 
-  function rewriterFor(cfg, url, token, cleanPath) {
+  function rewriterFor(cfg, url, token, cleanPath, carrier) {
     return makeUrlRewriter({
-      code: token, prefix: cfg.prefix, handoffPrefix: cfg.handoffPrefix,
+      code: token, carrier, prefix: cfg.prefix, handoffPrefix: cfg.handoffPrefix, param: cfg.param, handoffParam: cfg.handoffParam,
       handoffPaths: cfg.handoffPaths, skipPaths: [...cfg.skipPaths, `${cfg.dashboard.path}/**`],
       cleanPath, requestOrigin: url.origin, upstreamOrigin: cfg.upstreamOrigin || url.origin,
       sameOrigins: new Set([url.origin, ...(cfg.upstreamOrigin ? [cfg.upstreamOrigin] : []), ...(cfg.publicOrigin ? [new URL(cfg.publicOrigin).origin] : []), ...cfg.sameSiteOrigins]),
@@ -91,11 +99,12 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
 
   /** The research brief for a session. token = null renders clean links (for a person who opened a shared brief URL). */
   function briefResponse(cfg, request, url, code, token, scores, extraHeaders = {}) {
+    const carrier = carrierFor(cfg, code);
     const accept = (request.headers.get('accept') || '').toLowerCase();
     const kind = accept.includes('text/markdown') && !/text\/html/.test(accept.split('text/markdown')[0]) ? 'markdown' : 'html';
     let text = renderBrief(cfg, asScored(cfg, scores), { kind, site: siteName(cfg, url) });
     if (token) {
-      const rw = rewriterFor(cfg, url, token, cfg.brief.path);
+      const rw = rewriterFor(cfg, url, token, cfg.brief.path, carrier);
       text = kind === 'html' ? rewriteHtml(text, rw) : rewriteMarkdown(text, rw);
     }
     return new Response(text, {
@@ -128,12 +137,12 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     const cfg = source.get();
     if (!cfg) return { kind: 'pass' };
     const url = new URL(request.url);
-    const ho = parsePrefixed(url.pathname, cfg.handoffPrefix);
-    const pre = ho ? null : parsePrefixed(url.pathname, cfg.prefix);
+    const { ho, pre, cleanPath, cleanSearch } = readSession(url, cfg);
+    const clean = cleanPath + cleanSearch;
 
     // Kill switch: never leave a session URL broken; send it to the clean page.
     if (cfg.enabled === false) {
-      if (ho || pre) return { kind: 'respond', response: redirect((ho || pre).rest + url.search, 302) };
+      if (ho || pre) return { kind: 'respond', response: redirect(clean, 302) };
       return { kind: 'pass' };
     }
 
@@ -143,26 +152,32 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     const live = agent && cfg.trackKinds.includes(agent.kind);
     const ipHash = hashIp(ip, cfg.ipSalt || cfg.codePrefix);
     const who = agent ? { agent: agent.name, vendor: agent.vendor, kind: agent.kind } : {};
+    const probe = PROBE_RE.test(request.headers.get('x-wake-verify') || '') ? request.headers.get('x-wake-verify') : undefined;
+    const tag = probe ? { probe } : {};
+    // A `wake verify` probe also learns how this SDK is set up. Real visitors never get these headers.
+    const probeHeaders = (code) => (probe ? {
+      'x-wake-mode': cfg.mode,
+      'x-wake-carrier': `${code ? carrierFor(cfg, code) : cfg.carrier}; prefix=${cfg.prefix}; handoffPrefix=${cfg.handoffPrefix}; param=${cfg.param}; handoffParam=${cfg.handoffParam}`,
+    } : {});
 
     if (ho) {
       const path = cfg.normalizePath(ho.rest);
       if (live) {
         // Agents often fetch a link before sharing it. That is not a hand-off.
-        emit({ ts, code: ho.code, type: 'link_check', actor: 'agent', ...who, ipHash, ua, method: request.method, path, status: 307 });
-        return { kind: 'respond', response: redirect(`${cfg.prefix}/${ho.token}${ho.rest}${url.search}`, 307) };
+        emit({ ts, code: ho.code, type: 'link_check', actor: 'agent', ...who, ipHash, ua, method: request.method, path, status: 307, data: { via: ho.via }, ...tag });
+        return { kind: 'respond', response: redirect(sessionHref({ ...cfg, carrier: ho.via }, ho.token, ho.rest, cleanSearch), 307, probeHeaders(ho.code)) };
       }
       const referer = request.headers.get('referer') || '';
-      emit({ ts, code: ho.code, type: 'handoff', actor: agent ? 'bot' : 'human', ...who, ipHash, ua, method: request.method, path, status: 302, data: { referer } });
-      return { kind: 'respond', response: redirect(ho.rest + url.search, 302, agent ? {} : { 'set-cookie': cookie(cfg, ho.code) }) };
+      emit({ ts, code: ho.code, type: 'handoff', actor: agent ? 'bot' : 'human', ...who, ipHash, ua, method: request.method, path, status: 302, data: { referer, via: ho.via }, ...tag });
+      return { kind: 'respond', response: redirect(clean, 302, agent ? {} : { 'set-cookie': cookie(cfg, ho.code) }) };
     }
 
-    const cleanPath = pre ? pre.rest : url.pathname;
     const path = cfg.normalizePath(cleanPath);
-    const base = { ts, ...who, ipHash, ua, method: request.method, path };
+    const base = { ts, ...who, ipHash, ua, method: request.method, path, ...tag };
 
     if (live) {
       if (cfg.mode === 'shadow') {
-        return { kind: 'agent', path: cleanPath + url.search, ctx: { cfg, url, cleanPath, path, base: { ...base, actor: 'agent', code: pre?.code ?? null }, shadow: true, scores: decodeState(pre?.state, cfg.intents.length) } };
+        return { kind: 'agent', path: clean, ctx: { cfg, url, cleanPath, cleanSearch, path, probeHeaders: probeHeaders(null), base: { ...base, actor: 'agent', code: pre?.code ?? null }, shadow: true, scores: decodeState(pre?.state, cfg.intents.length) } };
       }
       const code = pre?.code || mintCode(cfg.codePrefix);
       if (cfg.brief.enabled && cleanPath === cfg.brief.path && request.method === 'GET') {
@@ -171,17 +186,17 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
         const arm = unitHash(`${code}:${BRIEF_RULE}`) < cfg.brief.holdout ? 'holdout' : 'routed';
         emit({ ...base, actor: 'agent', code, type: 'brief', status: 200, title: cfg.brief.title,
           data: { arm, minted: !pre, facts: groups.flatMap((g) => g.facts.map((f) => f.id)) } });
-        return { kind: 'respond', response: briefResponse(cfg, request, url, code, pre?.token || code, scores) };
+        return { kind: 'respond', response: briefResponse(cfg, request, url, code, pre?.token || code, scores, probeHeaders(code)) };
       }
       return {
-        kind: 'agent', path: cleanPath + url.search,
-        ctx: { cfg, url, cleanPath, path, code, minted: !pre, scores: decodeState(pre?.state, cfg.intents.length), base: { ...base, actor: 'agent', code } },
+        kind: 'agent', path: clean,
+        ctx: { cfg, url, cleanPath, cleanSearch, path, code, carrier: carrierFor(cfg, code), probeHeaders: probeHeaders(code), minted: !pre, scores: decodeState(pre?.state, cfg.intents.length), base: { ...base, actor: 'agent', code } },
       };
     }
 
     if (agent) {
       // Search engines and crawlers never keep a session URL.
-      if (pre) return { kind: 'respond', response: redirect(cleanPath + url.search, 301) };
+      if (pre) return { kind: 'respond', response: redirect(clean, 301) };
       if (cfg.botSampleRate < 1 && Math.random() >= cfg.botSampleRate) return { kind: 'pass' };
       return { kind: 'bot', ctx: { cfg, path, base: { ...base, actor: 'bot', code: null } } };
     }
@@ -190,18 +205,18 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
     if (pre && cfg.brief.enabled && cleanPath === cfg.brief.path && request.method === 'GET') {
       const extra = {};
       if (!sid) {
-        emit({ ...base, path, actor: 'human', code: pre.code, type: 'shared', status: 200, data: { referer: request.headers.get('referer') || '' } });
+        emit({ ...base, path, actor: 'human', code: pre.code, type: 'shared', status: 200, data: { referer: request.headers.get('referer') || '', via: pre.via } });
         extra['set-cookie'] = cookie(cfg, pre.code);
       }
       return { kind: 'respond', response: briefResponse(cfg, request, url, pre.code, null, decodeState(pre.state, cfg.intents.length), extra) };
     }
     if (pre) {
-      // A person opened a session URL directly (the agent shared an /a/ link, or it was forwarded).
+      // A person opened a session URL directly (the agent shared a session link, or it was forwarded).
       if (!sid) {
-        emit({ ...base, path, actor: 'human', code: pre.code, type: 'shared', status: 302, data: { referer: request.headers.get('referer') || '' } });
-        return { kind: 'respond', response: redirect(cleanPath + url.search, 302, { 'set-cookie': cookie(cfg, pre.code) }) };
+        emit({ ...base, path, actor: 'human', code: pre.code, type: 'shared', status: 302, data: { referer: request.headers.get('referer') || '', via: pre.via } });
+        return { kind: 'respond', response: redirect(clean, 302, { 'set-cookie': cookie(cfg, pre.code) }) };
       }
-      return { kind: 'respond', response: redirect(cleanPath + url.search, 302) };
+      return { kind: 'respond', response: redirect(clean, 302) };
     }
     if (sid) return { kind: 'human', ctx: { cfg, path, base: { ...base, actor: 'human', code: sid } } };
     return { kind: 'pass' };
@@ -257,8 +272,14 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
       if (kind && status === 200 && !tooBig && cfg.rules.length) data.blocks = listBlocks(await response.clone().text());
       if (status === 404) emit({ ...base, type: 'not_found', status, data });
       else emit({ ...base, type: 'fetch', status, query, data });
-      return response;
+      if (!Object.keys(ctx.probeHeaders || {}).length) return response;
+      const h = new Headers(response.headers);
+      for (const [k, v] of Object.entries(ctx.probeHeaders)) h.set(k, v);
+      return new Response(NULL_BODY.has(status) ? null : response.body, { status, statusText: response.statusText, headers: h });
     }
+
+    // Split test of the two carriers: every session is in one arm, compared on hand-offs and conversions.
+    const carrierTest = cfg.carrier === 'split' ? [{ rule: CARRIER_TEST, arm: ctx.carrier }] : [];
 
     const conv = status < 400 ? matchConversion(cfg, base.method, path) : null;
     if (conv) emit({ ...base, type: 'conversion', status, data: { name: conv.name, value: Number(response.headers.get('x-wake-value')) || conv.value || 0 } });
@@ -271,27 +292,28 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
       const hit = suggestPath(path, await candidatePaths(cfg, url.origin), { aliases: cfg.aliases, synonyms: cfg.synonyms, threshold: cfg.rescueThreshold });
       if (hit && cfg.mode === 'route') {
         emit({ ...base, type: 'rescue', status: 308, data: { to: hit.to, score: hit.score, minted: ctx.minted } });
-        return redirect(`${cfg.prefix}/${token}${hit.to}${url.search}`, 308, { 'x-wake-session': ctx.code });
+        return redirect(sessionHref({ ...cfg, carrier: ctx.carrier }, token, hit.to, ctx.cleanSearch), 308, { 'x-wake-session': ctx.code, ...ctx.probeHeaders });
       }
       emit({ ...base, type: 'not_found', status, data: { suggestion: hit?.to ?? null, minted: ctx.minted } });
     }
 
-    const rewriteUrl = rewriterFor(cfg, url, token, cleanPath);
+    const rewriteUrl = rewriterFor(cfg, url, token, cleanPath, ctx.carrier);
 
     const out = copyHeaders(response);
     out.set('x-wake-session', ctx.code);
+    for (const [k, v] of Object.entries(ctx.probeHeaders || {})) out.set(k, v);
     out.set('cache-control', 'private, no-store');
     const loc = response.headers.get('location');
     if (loc) out.set('location', rewriteUrl(loc));
 
     if (!kind || base.method === 'HEAD' || tooBig) {
-      if (status !== 404) emit({ ...base, type: 'fetch', status, query, data: { minted: ctx.minted, ...(tooBig ? { skipped: 'size' } : {}) } });
+      if (status !== 404) emit({ ...base, type: 'fetch', status, query, data: { minted: ctx.minted, carrier: ctx.carrier, ...(tooBig ? { skipped: 'size' } : {}), ...(carrierTest.length ? { exposures: carrierTest } : {}) } });
       return new Response(NULL_BODY.has(status) ? null : response.body, { status, headers: out });
     }
 
     let text = await response.text();
     const applied = [];
-    const exposures = [];
+    const exposures = [...carrierTest];
     if (status === 200 && cfg.mode === 'route') {
       const scored = scoredOf(scores);
       for (const rule of cfg.rules) {
@@ -325,7 +347,7 @@ export function createCore({ source, telemetry, fetch: fetchImpl = globalThis.fe
 
     if (status !== 404) {
       emit({ ...base, type: 'fetch', status, query, title: extractTitle(text, kind),
-        data: { minted: ctx.minted, ...(applied.length ? { rules: applied } : {}), ...(exposures.length ? { exposures } : {}) } });
+        data: { minted: ctx.minted, carrier: ctx.carrier, ...(applied.length ? { rules: applied } : {}), ...(exposures.length ? { exposures } : {}) } });
     }
 
     if (kind === 'html') {

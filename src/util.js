@@ -18,13 +18,67 @@ export function parsePrefixed(pathname, prefix) {
   if (!pathname.startsWith(prefix + '/')) return null;
   const after = pathname.slice(prefix.length + 1);
   const slash = after.indexOf('/');
-  const token = slash === -1 ? after : after.slice(0, slash);
+  const parsed = parseToken(slash === -1 ? after : after.slice(0, slash));
+  return parsed && { ...parsed, rest: slash === -1 ? '/' : after.slice(slash) };
+}
+
+/** Split a session token "WK-7K2Q9P.3a" into { code, state, token }, or null when it is not one. */
+export function parseToken(token) {
+  if (!token) return null;
   const dot = token.indexOf('.');
   const code = dot === -1 ? token : token.slice(0, dot);
   const state = dot === -1 ? '' : token.slice(dot + 1);
   if (!CODE_RE.test(code) || !/^[0-9a-z]{0,64}$/.test(state)) return null;
-  const rest = slash === -1 ? '/' : after.slice(slash);
-  return { code, state, token, rest };
+  return { code, state, token };
+}
+
+const paramName = (part) => { try { return decodeURIComponent(part.split('=')[0].replace(/\+/g, ' ')); } catch { return part.split('=')[0]; } };
+
+/** The first value of a query parameter, read from a raw "?a=1&b=2" string. */
+export function getParam(search, name) {
+  for (const part of (search || '').replace(/^\?/, '').split('&')) {
+    if (part && paramName(part) === name) {
+      if (!part.includes('=')) return '';
+      const v = part.slice(part.indexOf('=') + 1);
+      try { return decodeURIComponent(v.replace(/\+/g, ' ')); } catch { return v; }
+    }
+  }
+  return null;
+}
+
+/** Remove parameters from a raw "?a=1&b=2" string. The others keep their exact spelling and order. */
+export function stripParams(search, names) {
+  const parts = (search || '').replace(/^\?/, '').split('&').filter((p) => p && !names.includes(paramName(p)));
+  return parts.length ? '?' + parts.join('&') : '';
+}
+
+/** Set one parameter (replacing any earlier value) at the end of a raw "?a=1" string. value must be URL-safe. */
+export function setParam(search, name, value) {
+  const rest = stripParams(search, [name]);
+  return (rest ? rest + '&' : '?') + `${name}=${value}`;
+}
+
+/**
+ * Find the session code a URL carries, in either form:
+ *   path   /a/WK-7K2Q9P.3a/plans    (cfg.prefix; cfg.handoffPrefix for hand-offs)
+ *   query  /plans?wk=WK-7K2Q9P.3a   (cfg.param;  cfg.handoffParam for hand-offs)
+ * Both forms are always read, so links keep working when a site switches carrier.
+ * Returns { ho, pre, cleanPath, cleanSearch }: ho / pre are { code, state, token, rest, via } or null,
+ * and cleanSearch is the query without Wake's parameters.
+ */
+export function readSession(url, cfg) {
+  const cleanSearch = stripParams(url.search, [cfg.param, cfg.handoffParam]);
+  let ho = parsePrefixed(url.pathname, cfg.handoffPrefix);
+  let pre = ho ? null : parsePrefixed(url.pathname, cfg.prefix);
+  if (ho) ho.via = 'path';
+  else if (pre) pre.via = 'path';
+  else {
+    const h = parseToken(getParam(url.search, cfg.handoffParam));
+    const p = h ? null : parseToken(getParam(url.search, cfg.param));
+    if (h) ho = { ...h, rest: url.pathname, via: 'query' };
+    if (p) pre = { ...p, rest: url.pathname, via: 'query' };
+  }
+  return { ho, pre, cleanPath: (ho || pre)?.rest ?? url.pathname, cleanSearch };
 }
 
 /** Glob for URL paths: "*" matches within one segment, "**" matches anything. */

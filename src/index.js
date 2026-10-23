@@ -11,3 +11,4 @@ export { createCollector, publicConfig, DEFAULT_LIMITS } from './collector.js';
 export { createCore } from './sdk/core.js';
 export { createTelemetry } from './sdk/telemetry.js';
 export { createConfigSource } from './sdk/config-source.js';
+export { verifySite, formatReport, VERIFY_UA } from './verify.js';

@@ -1,11 +1,21 @@
-import { matchPath } from './util.js';
+import { matchPath, getParam, setParam } from './util.js';
 
 const ASSET_EXT = /\.(css|js|mjs|map|png|jpe?g|gif|webp|avif|svg|ico|woff2?|ttf|otf|mp4|webm|mp3|wav|zip|gz)$/i;
 const SKIP_SCHEME = /^(#|mailto:|tel:|sms:|javascript:|data:|blob:)/i;
 
 /**
+ * Where a link goes once it carries a session token.
+ *   path:  /a/{token}/page?x=1     (/r/ for hand-off pages)
+ *   query: /page?x=1&wk={token}    (wkh= for hand-off pages)
+ */
+export function sessionHref({ carrier, prefix, handoffPrefix, param, handoffParam }, token, path, search = '', handoff = false) {
+  if (carrier === 'query') return path + setParam(search, handoff ? handoffParam : param, token);
+  return `${handoff ? handoffPrefix : prefix}/${token}${path}${search}`;
+}
+
+/**
  * Build a URL rewriter for one response.
- * ctx: { code, prefix, handoffPrefix, handoffPaths, skipPaths, cleanPath,
+ * ctx: { code, carrier, prefix, handoffPrefix, param, handoffParam, handoffPaths, skipPaths, cleanPath,
  *        requestOrigin, upstreamOrigin, sameOrigins: Set<string> }
  */
 export function makeUrlRewriter(ctx) {
@@ -21,12 +31,12 @@ export function makeUrlRewriter(ctx) {
     const path = url.pathname;
     if (ASSET_EXT.test(path)) return raw;
     if (path.startsWith(ctx.prefix + '/') || path.startsWith(ctx.handoffPrefix + '/')) return raw;
+    if (ctx.param && (getParam(url.search, ctx.param) !== null || getParam(url.search, ctx.handoffParam) !== null)) return raw;
     if (ctx.skipPaths && matchPath(ctx.skipPaths, path)) return raw;
-    const lead = matchPath(ctx.handoffPaths, path) ? ctx.handoffPrefix : ctx.prefix;
-    const newPath = `${lead}/${ctx.code}${path}`;
-    if (!absolute) return newPath + url.search + url.hash;
+    const href = sessionHref(ctx, ctx.code, path, url.search, matchPath(ctx.handoffPaths, path)) + url.hash;
+    if (!absolute) return href;
     const origin = url.origin === ctx.upstreamOrigin ? ctx.requestOrigin : url.origin;
-    return origin + newPath + url.search + url.hash;
+    return origin + href;
   };
 }
 
@@ -36,7 +46,15 @@ export function makeUrlRewriter(ctx) {
  */
 export function rewriteHtml(html, rewriteUrl) {
   return html.replace(/<(?:a|area|form)\b[^>]*>/gi, (tag) =>
-    tag.replace(/(\s(?:href|action)\s*=\s*)(["'])(.*?)\2/gi, (_m, attr, q, val) => attr + q + rewriteUrl(val) + q));
+    tag.replace(/(\s(?:href|action)\s*=\s*)(["'])(.*?)\2/gi, (_m, attr, q, val) => attr + q + rewriteAttr(val, rewriteUrl) + q));
+}
+
+/** Attribute values spell "&" as "&amp;"; rewrite the real URL and keep the page's spelling. */
+function rewriteAttr(val, rewriteUrl) {
+  if (!/&amp;/i.test(val)) return rewriteUrl(val);
+  const url = val.replace(/&amp;/gi, '&');
+  const out = rewriteUrl(url);
+  return out === url ? val : out.replace(/&/g, '&amp;');
 }
 
 /** Rewrite links in Markdown: [text](url), <url>, and bare same-site URLs. */

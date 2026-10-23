@@ -94,6 +94,18 @@ function* overviewOf(store, config, { since = 0 } = {}) {
     });
   }
 
+  if (config.carrier === 'split') {
+    // Which way of carrying the session code survives into a person's click: query parameter vs path.
+    const arm = (name) => exp.find((e) => e.rule === 'link-carrier' && e.arm === name) || { n: 0, handoffs: 0, conversions: 0 };
+    const query = arm('query'), path = arm('path');
+    experiments.push({
+      id: 'link-carrier', promote: null, kind: 'carrier', label: 'Session code in the query (?' + config.param + '=) vs the path (' + config.prefix + '/)',
+      holdoutShare: 0.5, arms: ['Query', 'Path'], routed: query, holdout: path,
+      handoff: compare({ n: query.n, k: query.handoffs }, { n: path.n, k: path.handoffs }),
+      conversion: compare({ n: query.n, k: query.conversions }, { n: path.n, k: path.conversions }),
+    });
+  }
+
   const guessed = (yield store.guessedPaths(since))
     .map((g) => ({ path: g.path, sessions: Number(g.sessions), rescuedTo: Number(g.rescued) ? JSON.parse(g.data || '{}').to : null }));
 

@@ -6,6 +6,8 @@
 //   search-engine classic search engines; they must never see session codes
 // Order matters: the first match wins.
 export const AGENTS = [
+  // `wake verify` says who it is instead of borrowing an assistant's name, and is treated like a live agent.
+  { match: 'Wake-Verify', name: 'Wake verify', vendor: 'Wake', kind: 'live' },
   { match: 'ChatGPT-User', name: 'ChatGPT', vendor: 'OpenAI', kind: 'live' },
   { match: 'Claude-User', name: 'Claude', vendor: 'Anthropic', kind: 'live' },
   { match: 'Perplexity-User', name: 'Perplexity', vendor: 'Perplexity', kind: 'live' },

@@ -74,6 +74,16 @@ app.use(wakeMiddleware({ apiKey: process.env.WAKE_API_KEY, endpoint: 'https://co
 | `trace` (default) | Links on agent-read pages carry a session code | Get exact journeys and revenue |
 | `route` | Also reorders page blocks for agents, with a holdout test | Measure what helps agents recommend you |
 
+The session code can travel in the path (`/a/{code}/pricing`) or in a query parameter (`/pricing?wk={code}`). Set `carrier: 'split'` to measure which one survives into more of your customers' clicks.
+
+## Check your install
+
+```bash
+npx wake verify https://www.example.com --endpoint https://collector.example.com --api-key "$WAKE_API_KEY"
+```
+
+It visits your site as a person, an AI agent and a search crawler. It checks that people are untouched, agent links carry the session, sign-up clicks are credited and events reach the collector. It exits non-zero on a failure, so you can run it in CI after every deploy.
+
 ## Open core
 
 The SDK, the single-site collector and its dashboard are [Apache-2.0](LICENSE). Hosting many sites (organizations, API keys, Postgres, the Cloudflare collector) is **Wake Enterprise** in [`ee/`](ee/LICENSE): free to read and try, and production use needs a subscription.
